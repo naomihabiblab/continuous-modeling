@@ -2,5 +2,24 @@
 .Rhistory
 .RData
 .Ruserdata
+.RDataTmp
+
+
+*.RDS
+*.png
+*.jpg
+*.pdf
+*.csv
 
 .DS_Store
+
+# IDEA and PyCharm
+# User-specific stuff
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/usage.statistics.xml
+.idea/**/dictionaries
+.idea/**/shelf
+
+
+Plots/
