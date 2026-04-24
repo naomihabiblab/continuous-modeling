@@ -12,7 +12,7 @@ library(tictoc)
 library(stringr)
 library(pryr)
 
-source("utils.R")
+source("R/utils.R")
 source("cell_type_analysis/fit_topics.R")
 
 

@@ -12,7 +12,7 @@ library(tictoc)
 library(stringr)
 library(pryr)
 
-source("utils.R")
+source("R/utils.R")
 source("cell_type_analysis/fit_topics.R")
 
 # 264gb for the DE
@@ -47,7 +47,7 @@ print("After loading")
 gc()
 mem_used()
 
-# TODO: add flag to run only the subtype fit
+#
 # inh_classes <- unique(obj@meta.data$annotation)
 #
 # for (inh_class in inh_classes) {
@@ -136,7 +136,6 @@ saveRDS(dfa_vsnull, file = sprintf("%s_dfa_vsnull.%s.RDS", output_name_prefix, k
 toc()
 print("All done")
 
-
 # subset fit
 output_name_prefix <- "subset_inhibitory"
 print(output_name_prefix)
@@ -176,3 +175,4 @@ toc()
 print("Saving")
 saveRDS(topic_fit, sprintf("%s_topic_fit.%s.RDS", output_name_prefix, k))
 
+print("Done subset")

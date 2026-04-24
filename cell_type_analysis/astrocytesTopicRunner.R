@@ -12,7 +12,7 @@ library(tictoc)
 library(stringr)
 library(pryr)
 
-source("utils.R")
+source("R/utils.R")
 source("cell_type_analysis/fit_topics.R")
 
 
@@ -132,3 +132,4 @@ toc()
 print("Saving")
 saveRDS(topic_fit, sprintf("%s_topic_fit.%s.RDS", output_name_prefix, k))
 
+print("Done subset")

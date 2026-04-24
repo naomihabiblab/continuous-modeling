@@ -14,7 +14,7 @@ library(pryr)
 
 # 400GB for the DE for cux+
 # 8 cpu
-source("utils.R")
+source("R/utils.R")
 source("cell_type_analysis/fit_topics.R")
 
 

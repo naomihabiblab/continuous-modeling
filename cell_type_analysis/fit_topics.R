@@ -1,9 +1,45 @@
-# This files is base on fit_topic_model.R from commit 65e3ad8a8e6f11ec6e5839e6e76dd14f37fca16d with caching added
+#' @title Topic Model Fitting with Caching
+#' @description Fits fastTopics NMF topic models with disk caching for
+#'              initialization, fitting, and refinement steps.
+#' @note Based on fit_topic_model.R from commit 65e3ad8a8e6f11ec6e5839e6e76dd14f37fca16d
+
 library(fastTopics)
 
-CACHE_DIR <- "cache"
+CACHE_DIR <- file.path(getwd(), "cache")
 dir.create(CACHE_DIR, showWarnings = FALSE)
 
+#' Check if any columns are all zeros
+#'
+#' @param X Numeric matrix
+#'
+#' @return Logical indicating if any column sums to zero
+any.allzero.cols <- function(X) {
+  any(colSums(X) == 0)
+}
+
+
+#' Fit topic model with caching
+#'
+#' @description Fits a Poisson NMF topic model using fastTopics with caching
+#'              at each stage (init, main fit, refinement) to allow resumption.
+#'
+#' @param X Count matrix (cells x genes)
+#' @param k Number of topics
+#' @param name Prefix for cache file names
+#' @param numiter.main Number of main fitting iterations (default: 100)
+#' @param numiter.refine Number of refinement iterations (default: 100)
+#' @param method.main Main fitting method (default: "em")
+#' @param method.refine Refinement method (default: "scd")
+#' @param init.method Initialization method (default: c("topicscore", "random"))
+#' @param control.init Control parameters for initialization
+#' @param control.main Control parameters for main fitting
+#' @param control.refine Control parameters for refinement
+#' @param verbose Verbosity level (default: c("progressbar", "detailed", "none"))
+#'
+#' @return Multinomial topic model fit object
+#'
+#' @details Cache files are saved to CACHE_DIR with naming convention:
+#'          {name}_{k}_{method.main}_{method.refine}_{stage}.RDS
 fit_topics <-
   function(X, k, name, numiter.main = 100, numiter.refine = 100, method.main = "em",
            method.refine = "scd", init.method = c("topicscore", "random"),
@@ -20,7 +56,7 @@ fit_topics <-
     verbose <- match.arg(verbose)
 
     # If necessary, remove all-zero columns from the counts matrix.
-    if (fastTopics:::any.allzero.cols(X)) {
+    if (any.allzero.cols(X)) {
       X <- fastTopics:::remove.allzero.cols(X)
       warning(sprintf(paste("One or more columns of X are all zero; after",
                             "removing all-zero columns, %d columns will be",
