@@ -502,6 +502,13 @@ format.sheet <- function(wb, sheet, df, sets, horizontal.border.after=NULL) {
   writeData(wb, sheet = sheet_name, programs_df, rowNames = FALSE)
   addStyle(wb, sheet = sheet_name, header.style(), rows = 1, cols = 1:ncol(programs_df), gridExpand = TRUE)
 
+  enrichment_programs_healthy_path <- file.path(spatial_base, "for_paper", "enrichment_data", "programs", "all_pvals_programs_healthy.csv")
+  programs_healthy_df <- read.csv(enrichment_programs_healthy_path, check.names = FALSE)
+  sheet_name <- "Programs enrichment (healthy)"
+  addWorksheet(wb, sheet_name, gridLines = TRUE)
+  writeData(wb, sheet = sheet_name, programs_healthy_df, rowNames = FALSE)
+  addStyle(wb, sheet = sheet_name, header.style(), rows = 1, cols = 1:ncol(programs_healthy_df), gridExpand = TRUE)
+
   pathways_df <- read.csv(enrichment_pathways_path, check.names = FALSE)
   sheet_name <- "Pathways enrichment"
   addWorksheet(wb, sheet_name, gridLines = TRUE)

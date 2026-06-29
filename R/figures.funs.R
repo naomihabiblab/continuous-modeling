@@ -1302,3 +1302,74 @@ plot_violin_signature_per_group <- function(df, feature_name, ct) {
       labs(y=feature_name) +
       ggtitle(glue::glue("{feature_name} in prAD vs start neither cells  - {ct}"))
 }
+
+#' SST vs PVALB program score violin plot (4-group x-axis)
+#'
+#' @description Returns a ggplot comparing cell-cycle or stress/apoptosis scores
+#'   in SST and PVALB subtypes across start and prAD groups.
+#'   X-axis order: PVALB/start, SST/start, PVALB/prAD, SST/prAD.
+#'   Two tiers of Wilcoxon significance brackets (BH-adjusted):
+#'     low  — across subtype within each group (adjacent pairs)
+#'     high — across group within each subtype  (spanning pairs)
+#'
+#' @param dynamics_features Data frame with columns projid, pruned_subtype, group,
+#'   and the score column named by \code{score_col}. One row per projid×subtype×group.
+#' @param score_col  Name of the score column (e.g. "cell_cycle_topic_score")
+#' @param label      Human-readable program name used in axis/title labels
+#' @param ct         Cell-type string used in the plot title
+#' @param colors     Named vector c(SST=..., PVALB=...); start groups get alpha 0.4
+#'
+#' @return ggplot object
+make_sst_vs_pvalb_plot <- function(dynamics_features, score_col, label, ct,
+                                   colors = c(SST = "#ef6c00", PVALB = "#4db6ac")) {
+  xg_levels <- c("PVALB\nstart", "SST\nstart", "PVALB\nprAD", "SST\nprAD")
+
+  df <- dynamics_features %>%
+    dplyr::filter(group %in% c("start", "prAD")) %>%
+    dplyr::mutate(pruned_subtype = stringr::str_to_upper(pruned_subtype)) %>%
+    dplyr::filter(pruned_subtype %in% c("SST", "PVALB")) %>%
+    dplyr::mutate(xg = factor(paste(pruned_subtype, group, sep = "\n"), levels = xg_levels))
+
+  xg_vals <- split(df[[score_col]], df$xg)
+
+  pairs <- list(
+    c("PVALB\nstart", "SST\nstart"),     # across subtype in start  (adjacent)
+    c("PVALB\nprAD",  "SST\nprAD"),      # across subtype in prAD   (adjacent)
+    c("PVALB\nstart", "PVALB\nprAD"),    # within PVALB across group (spanning)
+    c("SST\nstart",   "SST\nprAD")       # within SST across group   (spanning)
+  )
+  p_raw <- sapply(pairs, function(p) wilcox.test(xg_vals[[p[1]]], xg_vals[[p[2]]], exact = FALSE)$p.value)
+  p_adj <- p.adjust(p_raw, method = "BH")
+
+  y_max <- max(df[[score_col]], na.rm = TRUE)
+  signif_df <- data.frame(
+    group1       = sapply(pairs, `[`, 1),
+    group2       = sapply(pairs, `[`, 2),
+    p.adj        = p_adj,
+    p.adj.signif = cut(p_adj, c(-Inf, 0.001, 0.01, 0.05, Inf), c("***", "**", "*", "ns")),
+    y.position   = c(y_max * 1.05, y_max * 1.05, y_max * 1.22, y_max * 1.38)
+  )
+
+  fill_vals <- c(
+    "SST\nstart"   = scales::alpha(colors[["SST"]],   0.4),
+    "SST\nprAD"    = colors[["SST"]],
+    "PVALB\nstart" = scales::alpha(colors[["PVALB"]], 0.4),
+    "PVALB\nprAD"  = colors[["PVALB"]]
+  )
+
+  ggplot2::ggplot(df, ggplot2::aes(x = xg, y = .data[[score_col]], fill = xg)) +
+    ggplot2::geom_violin(trim = FALSE, alpha = 0.8) +
+    ggplot2::stat_summary(fun = mean, geom = "crossbar", width = 0.3, color = "black") +
+    ggpubr::stat_pvalue_manual(
+      signif_df, label = "p.adj.signif", xmin = "group1", xmax = "group2",
+      tip.length = 0.01, inherit.aes = FALSE, hide.ns = FALSE
+    ) +
+    ggplot2::scale_fill_manual(values = fill_vals) +
+    ggplot2::theme_classic() +
+    ggplot2::theme(legend.position = "none") +
+    ggplot2::labs(
+      x     = NULL,
+      y     = glue::glue("Mean {label} score per donor"),
+      title = glue::glue("{ct}: SST vs PVALB \u2013 {label}")
+    )
+}

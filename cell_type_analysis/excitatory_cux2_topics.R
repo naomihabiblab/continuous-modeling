@@ -25,7 +25,7 @@ source("R/data_500_utils.R")
 source("R/topics.R")
 source("R/program_signature.R")
 source("R/markers.funs.R")
-
+source("validation/validation.functions.R")
 
 DATA_PATH <- file.path(get_result_dir(), "excitatory_topics")
 
@@ -38,13 +38,13 @@ topic_output_name_prefix <- paste0("all_cux2_", cux, "_excitatory")
 
 cux_file_suffix <- if(cux=="plus") '+' else '-'
 neural_class <- paste("cux2", cux, sep = "_")
-cell_type <- paste0('cux2', cux)
+cell_type <- paste0('cux2', if(cux=="plus") 'p' else 'm')
 
 
 plots_dir <- file.path(get_result_dir(), sprintf('ExcitatoryCux2%sAll', cux_file_suffix))
 dir.create(plots_dir, showWarnings = FALSE)
 
-object <- LoadH5Seurat(file.path(RAW_DATA_PATH, sprintf("cux2%s.h5Seurat", cux_file_suffix)))
+object <- LoadH5Seurat(file.path(SEURAT_OBJECT_DATA_PATH, sprintf("cux2%s.h5Seurat", cux_file_suffix)))
 object <- enrich_meta_data(object)
 object <- fix_similarity_names(object)
 
@@ -141,3 +141,19 @@ h5write(pathways, h5_path, dataset_path, write.attributes=TRUE)
 save_topics_score(cell_types = cell_type)
 save_allen_annotation(obj = object, cell.type = cell_type)
 save_abundance_stat(inhibitory, group = CELL_TYPE_TO_GROUP[[cell_type]], topics_columns=topics_columns_list[[k]])
+
+
+##########
+#   Compute and save programs signature score 
+##########
+genes_mapping <- get_genes_by_topic(cell_type)
+
+signature_score_prefix <- "Signature_"
+object <- add_module_score_named(object, genes_mapping$genes_by_topic, prefix=signature_score_prefix)
+
+signature_unique_score_prefix <- "SignatureUnique_"
+object <- add_module_score_named(object, genes_mapping$unique_genes_by_topic, prefix=signature_unique_score_prefix)
+
+h5write(object@meta.data %>% dplyr::select(starts_with("Signature")), TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[cell_type]], "/Signature"))
+h5write(object@meta.data %>% dplyr::select(starts_with("SignatureUnique")), TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[cell_type]], "/SignatureUnique"))
+

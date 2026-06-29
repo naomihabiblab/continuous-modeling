@@ -112,7 +112,7 @@ dot_plot <- function(data,
 
   base_plot <- ggplot(data.summarized, aes(variable, groups)) +
     geom_point(aes(size = value.alpha, color = value.group.mean), stroke = 0) +
-    scale_color_gradientn(colors = c("#00FFFF", "#FF9900")) +
+    scale_color_viridis() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
     labs(size = paste0('% cells have more than ', alpha.threshold),
          color = paste0('mean x > ', mean_threshold, ifelse(scale, ' (scaled)', '')))

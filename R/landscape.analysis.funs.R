@@ -14,7 +14,7 @@
 # }
 
 # reticulate::use_condaenv("scanpy.env")
-invisible(lapply(c("dplyr","tibble","reticulate","reshape2","anndata","progress","rhdf5"), library, character.only = T))
+invisible(lapply(c("dplyr","tibble","reticulate","reshape2","anndata","progress","rhdf5", "tidyr"), library, character.only = T))
 
 
 
@@ -60,10 +60,15 @@ associate.traits <- function(traits, covariates, controls, p.adjust.method="BH")
     do.call(rbind, lapply(make.names(colnames(covariates)), function(covariate) {
       # Set controlled covariates
       control <- colnames(controls)
-      control <- case_when(trait == "cogng_demog_slope" ~ paste(setdiff(control, c("msex", "age_death")), collapse = " + "),
-                           T ~ paste(control,collapse = " + "))
       
-      formula <- stringr::str_interp("${trait} ~ `${covariate}` + ${control}")
+      if (length(control) > 0) {
+        control <- case_when(trait == "cogng_demog_slope" ~ paste(setdiff(control, c("msex", "age_death")), collapse = " + "),
+                      T ~ paste(control,collapse = " + "))
+        formula <- stringr::str_interp("${trait} ~ `${covariate}` + ${control}")
+      } else {     
+        formula <- stringr::str_interp("${trait} ~ `${covariate}`")
+      }
+
       m <- summary(lm(formula, df[!is.na(df[,trait]), ]))
       
       data.frame(trait = trait, 
@@ -101,8 +106,8 @@ associate.traits.lmer <- function(traits, covariates, controls, p.adjust.method=
   df <- data.frame(traits, covariates, controls, mixed_model_intercept_controls, check.names = TRUE)
   
   # Handle covariate that include spaces or spacial characters  
-  covariates_orginal_names <- colnames(covariates)
-  names(covariates_orginal_names) <- make.names(covariates_orginal_names)
+  covariates_original_names <- colnames(covariates)
+  names(covariates_original_names) <- make.names(covariates_original_names)
   
   
   df <- do.call(rbind, lapply(colnames(traits), function(trait)
@@ -119,7 +124,7 @@ associate.traits.lmer <- function(traits, covariates, controls, p.adjust.method=
       
       m <- summary(lmerTest::lmer(formula, df[!is.na(df[,trait]), ]))
       data.frame(trait = trait, 
-                 covariate = covariates_orginal_names[[covariate]],
+                 covariate = covariates_original_names[[covariate]],
                  beta  = m$coefficients[covariate, 1],
                  se = m$coefficients[covariate, 2],
                  tstat = m$coefficients[covariate, 4],
@@ -569,4 +574,38 @@ associate.allen.traits <- function(df, data, exclude_list=c()) {
     controls = data.frame(data$obsm$meta.data[,c("age_death","msex","pmi")]))
 
   trait.association.pruned_subtype
+}
+
+
+#' Associate within-subtype program metrics with AD traits
+#'
+#' @description Pivots donor-level program metrics (one row per projid × pruned_subtype)
+#'              to wide format (one column per subtype) and runs associate.traits.
+#'
+#' @param dynamics_features Data frame with projid, pruned_subtype, and program metric columns
+#' @param data AnnData object with obsm$meta.data containing trait and control columns
+#' @param program_col Name of the program metric column to associate
+#' @param exclude_list Character vector of subtype names to exclude (default: empty)
+#' @param transform Function applied to covariates before association (default: identity; use sqrt for scores)
+#'
+#' @return Data frame of trait association results from associate.traits, with a program column
+associate.subtype.program.traits <- function(dynamics_features, data, program_col, exclude_list=c(), transform=identity) {
+  features <- dynamics_features %>%
+    filter(pruned_subtype != 'NA' & !(pruned_subtype %in% exclude_list)) %>%
+    dplyr::select(projid, pruned_subtype, all_of(program_col)) %>%
+    mutate(pruned_subtype = stringr::str_to_upper(pruned_subtype)) %>%
+    pivot_wider(id_cols = 'projid', names_from = 'pruned_subtype', values_from = all_of(program_col), values_fill = NA) %>%
+    column_to_rownames('projid') %>%
+    filter(rownames(.) %in% rownames(data)) %>%
+    arrange(match(rownames(.), rownames(data)))
+
+  traits_cols <- c("sqrt.amyloid_mf", "sqrt.tangles_mf", "sqrt.amyloid", "sqrt.tangles", "cogng_demog_slope")
+  traits <- data$obsm$meta.data[, traits_cols] %>% mutate(across(all_of(traits_cols), ~as.numeric(as.character(.))))
+  controls <- data.frame(data$obsm$meta.data[, c("age_death", "msex", "pmi")])
+
+  associate.traits(
+    traits = traits,
+    covariates = transform(features),
+    controls = controls
+  ) %>% mutate(program = program_col)
 }

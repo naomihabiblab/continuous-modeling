@@ -25,6 +25,7 @@ source("R/data_500_utils.R")
 source("R/topics.R")
 source("R/program_signature.R")
 source("R/markers.funs.R")
+source("validation/validation.functions.R")
 
 
 cell_type <- 'inhibitory'
@@ -38,7 +39,7 @@ topic_output_name_prefix <- "all_inhibitory"
 plots_dir <- file.path(get_result_dir(), 'InhibitoryAll')
 dir.create(plots_dir, showWarnings = FALSE)
 
-inhibitory <- LoadH5Seurat(file.path(RAW_DATA_PATH, "inhibitory.h5Seurat"))
+inhibitory <- LoadH5Seurat(file.path(SEURAT_OBJECT_DATA_PATH, "inhibitory.h5Seurat"))
 inhibitory <- enrich_meta_data(inhibitory)
 inhibitory <- fix_similarity_names(inhibitory)
 
@@ -137,6 +138,19 @@ save_allen_annotation(obj = inhibitory, cell.type = cell_type)
 save_abundance_stat(inhibitory, group = CELL_TYPE_TO_GROUP[[cell_type]], topics_columns=topics_columns_list[[k]])
 
 
+##########
+#   Within-cell permutation null (increasing programs k10 vs k8)
+##########
+# Self-contained: reads L from H5 (written above by save_topics_score), so this
+# block can be moved/run independently of the rest of the pipeline.
+source("R/topic_loading_permutation.R")
+
+run_increasing_programs_permutation_null(
+  cell.type = cell_type,
+  output_dir = file.path(plots_dir, "permutation_null")
+)
+
+
 ## Save subset fits to h5
 subsets <- c("SST", "VIP", "PVALB")
 
@@ -145,3 +159,43 @@ for (subset_name in subsets) {
   dataset_path <- glue::glue("{CELL_TYPE_TO_GROUP['inhibitory']}/subtype_{subset_name}")
   save_topic_fit(fit=fits[['9']], dataset_path = dataset_path)
 }
+
+
+### Senescence like genes signatures
+senescence_like_signatures <- list(senescence_increasing=c("CHEK2", "ATM", "PIK3CA", "AKT3", "FOXO1", "BANP"),
+                                   senescence_decreasing=c("BCL2", "BBC3"), 
+                                   `NFKB pathway`=c("TRAF6", "NFKB1"),
+                                   senescence_unknown=c("CDK2", "NBN"),
+                                   cell_cycle=c("CENPC", "ANAPC16", "CEP290", "STAG2"),
+                                   checkpoints=c("ATR", "RAD9A", "BRCA1"),
+                                   translision=c("REV1", "POLK"),
+                                   canonical_senescence=c("TP53", "CDKN1A", "CDKN2A"))
+
+senescence_like_genes <- unlist(senescence_like_signatures, use.names = FALSE)
+
+
+inhibitory <- AddModuleScore(inhibitory, senescence_like_signatures)
+column_names <- paste0("Cluster", 1:length(senescence_like_signatures))
+names(column_names) <- names(senescence_like_signatures)
+inhibitory@meta.data <- inhibitory@meta.data %>% dplyr::rename(!!!column_names)
+
+df <- FetchData(object = inhibitory, c(senescence_like_genes, 'projid', names(senescence_like_signatures)))
+df <- df %>% rownames_to_column('cell')
+h5delete(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[cell.type]], "/senescence_like_genes.signatures"))
+h5write(df, TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[cell.type]], "/senescence_like_genes.signatures"))
+
+
+
+##########
+#   Compute and save programs signature score 
+##########
+genes_mapping <- get_genes_by_topic(cell_type)
+
+signature_score_prefix <- "Signature_"
+inhibitory <- add_module_score_named(inhibitory, genes_mapping$genes_by_topic, prefix=signature_score_prefix)
+
+signature_unique_score_prefix <- "SignatureUnique_"
+inhibitory <- add_module_score_named(inhibitory, genes_mapping$unique_genes_by_topic, prefix=signature_unique_score_prefix)
+
+h5write(inhibitory@meta.data %>% dplyr::select(starts_with("Signature")), TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[cell_type]], "/Signature"))
+h5write(inhibitory@meta.data %>% dplyr::select(starts_with("SignatureUnique")), TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[cell_type]], "/SignatureUnique"))

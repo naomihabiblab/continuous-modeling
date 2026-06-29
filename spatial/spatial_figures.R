@@ -34,12 +34,13 @@ PLOTS_DIR <- get_result_dir()           # Auto-detects cluster vs local
 SHARED_DIR <- get_shared_dir()          # Auto-detects cluster vs local
 
 
-SPATIAL_BASE_DIR <- file.path(get_plots_dir(), "spatial")
+SPATIAL_BASE_DIR <- file.path(get_result_dir(), "spatial")
 
 # Specific input files
 SPATIAL_OBJECT_PATH <- file.path(SPATIAL_BASE_DIR, "for_paper/final_obj/spatial_obj_for_paper.h5ad")
 ENRICHMENT_BASE_DIR <- file.path(SPATIAL_BASE_DIR, "for_paper/enrichment_data")
 ENRICHMENT_PROGRAMS_PATH <- file.path(ENRICHMENT_BASE_DIR, "programs/all_pvals_programs.csv")
+ENRICHMENT_PROGRAMS__HEALTHY_PATH <- file.path(ENRICHMENT_BASE_DIR, "programs/all_pvals_programs_healthy.csv")
 ENRICHMENT_PATHWAYS_PATH <- file.path(ENRICHMENT_BASE_DIR, "pathways/all_pvals_pathways.csv")
 
 # Output directory for spatial plots
@@ -63,14 +64,41 @@ anndata <- import("anndata", convert = FALSE)
 adata <- anndata$read_h5ad(SPATIAL_OBJECT_PATH, backed = "r") 
 
 # TODO: use obs and obsm and not the full adata?
+h5ad_obs_to_df <- function(obs) {
+  n <- length(obs$`_index`)
+  df <- lapply(obs, function(field) {
+    if (is.list(field) && !is.null(field$categories) && !is.null(field$codes)) {
+      if (length(field$codes) == n) {
+        field$categories[field$codes + 1L]
+      } else {
+        NULL
+      }
+    } else if (length(field) == n) {
+      field
+    } else {
+      NULL
+    }
+  })
+  df <- df[!sapply(df, is.null)]
+  df <- as.data.frame(df)
+  rownames(df) <- obs$`_index`
+  df$`_index` <- NULL
+  df
+}
+
+test_obs <- rhdf5::h5read(SPATIAL_OBJECT_PATH, "obs")
+obs_df <- h5ad_obs_to_df(test_obs)
+
 obs <- adata$obs
 obsm <- adata$obsm
 
 obs_df <- py_to_r(obs)
-obsm_df=py_to_r(obsm)
 
-AD_samples=obs_df%>%dplyr::select(c('sample_id','levels'))%>%unique()%>%filter(levels!='control')
-AD_sample_id=AD_samples$sample_id
+AD_samples <- obs_df%>%dplyr::select(c('sample_id','levels'))%>%unique()%>%filter(levels!='control')
+AD_sample_id <- AD_samples$sample_id
+
+non_AD_sample <- obs_df %>% dplyr::select(c('sample_id', 'levels')) %>% unique() %>% filter(levels == 'control')
+non_AD_sample_id <- non_AD_sample$sample_id
 
 #####################
 #boxplots programs: #
@@ -109,9 +137,6 @@ plot_pairs_boxplot <- function(
     "C02248B5" = "C02248B5 (advanced)",
     "B01809C2" = "B01809C2 (advanced)"
   )
-  
-
-  
   
   ## keep only relevant pairs
   df_sub <- programs_data %>%
@@ -178,8 +203,87 @@ plot_pairs_boxplot <- function(
     )
 }
 
+plot_pairs_boxplot_healthy <- function(
+  programs_data_healthy,
+  pairs_df,
+  healthy_sample_cols,
+  y_offset = 0.15
+) {
 
-programs_data=read.csv(ENRICHMENT_PROGRAMS_PATH)
+  ## keep only relevant pairs
+  df_sub <- programs_data_healthy %>%
+    semi_join(pairs_df, by = c("ref_topic", "neighbor_topic"))
+
+  ## derive ordered pair labels from pairs_df
+  ordered_labels <- paste(pairs_df$ref_topic, "→", pairs_df$neighbor_topic)
+
+  ## long format
+  plot_long <- df_sub %>%
+    pivot_longer(
+      cols = all_of(healthy_sample_cols),
+      names_to = "sample",
+      values_to = "value"
+    ) %>%
+    mutate(
+      pair_label = factor(
+        paste(ref_topic, "→", neighbor_topic),
+        levels = ordered_labels
+      )
+    )
+
+  ## significance stars
+  stars_df <- df_sub %>%
+    mutate(
+      pair_label = factor(
+        paste(ref_topic, "→", neighbor_topic),
+        levels = ordered_labels
+      ),
+      star = case_when(
+        p_bh < 0.001 ~ "***",
+        p_bh < 0.01  ~ "**",
+        p_bh < 0.05  ~ "*",
+        TRUE         ~ ""
+      )
+    ) %>%
+    filter(star != "") %>%
+    distinct(pair_label, star) %>%
+    left_join(
+      plot_long %>%
+        group_by(pair_label) %>%
+        summarise(y = max(value, na.rm = TRUE) + y_offset),
+      by = "pair_label"
+    )
+
+  ## plot
+  ggplot(plot_long, aes(x = pair_label, y = value)) +
+    geom_boxplot(
+      fill = NA,
+      color = "black",
+      outlier.shape = NA,
+      width = 0.5
+    ) +
+    geom_jitter(width = 0.25, size = 1) +
+    geom_text(
+      data = stars_df,
+      aes(x = pair_label, y = y, label = star, size = 2),
+      inherit.aes = FALSE,
+      size = 6
+    ) +
+    geom_hline(yintercept = 1, linetype = "dashed") +
+    theme_minimal() +
+    theme(
+      panel.grid = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    ) +
+    labs(
+      x = "Reference → Neighbor Topic",
+      y = "Mean Enrichment",
+      color = "Sample"
+    )
+}
+
+programs_data <- read.csv(ENRICHMENT_PROGRAMS_PATH)
+programs_data_healthy <- read.csv(ENRICHMENT_PROGRAMS__HEALTHY_PATH)
 
 pairs_df_80 <- tibble(
   ref_topic = c(
@@ -200,11 +304,20 @@ pairs_df_80 <- tibble(
   )
 )
 
-# TODO: save to file
-plot_pairs_boxplot(
-  programs_data = programs_data,
-  pairs_df = pairs_df
-)
+withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "pairs_boxplot_80.pdf"), width=6, height=6, { 
+  plot_pairs_boxplot(
+    programs_data = programs_data,
+    pairs_df = pairs_df_80
+  ) %>% print
+})
+
+withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "pairs_boxplot_80_healthy.pdf"), width=6, height=6, { 
+  plot_pairs_boxplot_healthy(
+    programs_data = programs_data_healthy,
+    pairs_df = pairs_df_80,
+    healthy_sample_cols = non_AD_sample_id
+  ) %>% print
+})  
 
 pairs_df_85 <- tibble(
   ref_topic = c(
@@ -225,11 +338,12 @@ pairs_df_85 <- tibble(
   )
 )
 
-# TODO: save to file
-plot_pairs_boxplot(
-  programs_data = programs_data,
-  pairs_df = pairs_df_85
-)
+withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "pairs_boxplot_85.pdf"), width=6, height=6, { 
+  plot_pairs_boxplot(
+    programs_data = programs_data,
+    pairs_df = pairs_df_85
+  ) %>% print
+})
 
 
 #pathways: 
@@ -254,11 +368,12 @@ pairs_df_pathways <- tibble(
   )
 )
 
-
-plot_pairs_boxplot(
-  programs_data = pathways_data,
-  pairs_df = pairs_df_pathways
-)
+withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "pairs_boxplot_pathways.pdf"), width=6, height=6, { 
+  plot_pairs_boxplot(
+      programs_data = pathways_data,
+      pairs_df = pairs_df_pathways
+    ) %>% print
+})
 
 
 
@@ -638,8 +753,195 @@ withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "Ex_oxidative_stress_density_with_q
 })
 
 # TODO: add correlation heatmap
-# TODO: add sup table create 
 
+###############################################
+### Bin-program proportion boxplots (case vs control) ###
+###############################################
+
+#' Plot per-sample proportions for a list of spatial bin programs.
+#'
+#' For each program column in `programs` that matches `bin{bin_num}`:
+#'   - Cells with value == 1 define the "detected" population.
+#'   - Proportion = (detected cells per sample) / (total cells of that
+#'     annotation in that sample).
+#'   - Groups are compared (control vs case) with a Mann-Whitney U test
+#'     (wilcox.test), and p-values are FDR-corrected across all programs.
+#'   - Returns a patchwork / faceted ggplot.
+#'
+#' @param obs_df        data.frame with one row per cell. Must contain columns:
+#'                        sample_id, diagnosis ("control" / "case"), annotation,
+#'                        and all program columns listed in `programs`.
+#' @param programs      character vector of bin-column names to include
+#'                        (e.g. c("Ex_k3_score_bin80", "AST_k6_score_bin80")).
+#' @param bin_num       string; only columns containing "bin{bin_num}" are kept
+#'                        (default "80").
+#' @param max_cols_per_row  panels per row in the output grid (default 4).
+plot_bin_proportion_boxplots <- function(
+    obs_df,
+    programs,
+    bin_num          = "80",
+    max_cols_per_row = 4
+) {
+
+  bin_pattern <- paste0("bin", bin_num)
+  cols_to_plot <- programs[grepl(bin_pattern, programs, fixed = TRUE)]
+
+  if (length(cols_to_plot) == 0) {
+    message("No columns matching bin", bin_num, " found in programs.")
+    return(invisible(NULL))
+  }
+
+  # ---- Phase 1: compute proportions + raw p-values ----
+  results <- lapply(cols_to_plot, function(col_i) {
+    if (!col_i %in% colnames(obs_df)) {
+      warning("Column not found in obs_df: ", col_i)
+      return(NULL)
+    }
+
+    detected_annotations <- obs_df %>%
+      filter(.data[[col_i]] == 1) %>%
+      pull(annotation) %>%
+      na.omit() %>%
+      unique()
+
+    if (length(detected_annotations) == 0) return(NULL)
+
+    annotation_totals <- obs_df %>%
+      filter(annotation %in% detected_annotations) %>%
+      group_by(sample_id) %>%
+      summarise(total_annotation_cells = n(), .groups = "drop")
+
+    proportions_df <- obs_df %>%
+      filter(.data[[col_i]] == 1) %>%
+      group_by(sample_id, diagnosis) %>%
+      summarise(bin_cell_count = n(), .groups = "drop") %>%
+      left_join(annotation_totals, by = "sample_id") %>%
+      mutate(proportion = bin_cell_count / total_annotation_cells)
+
+    control_vals <- proportions_df %>% filter(diagnosis == "control") %>% pull(proportion)
+    case_vals    <- proportions_df %>% filter(diagnosis == "case")    %>% pull(proportion)
+
+    if (length(control_vals) == 0 || length(case_vals) == 0) return(NULL)
+
+    p_val <- wilcox.test(control_vals, case_vals, alternative = "two.sided", exact = FALSE)$p.value
+
+    list(
+      col_i          = col_i,
+      proportions_df = proportions_df,
+      annotations    = detected_annotations,
+      p_raw          = p_val
+    )
+  })
+
+  results <- Filter(Negate(is.null), results)
+  if (length(results) == 0) {
+    message("No valid comparisons found.")
+    return(invisible(NULL))
+  }
+
+  # ---- Phase 2: FDR correction ----
+  p_raw <- sapply(results, `[[`, "p_raw")
+  p_adj <- p.adjust(p_raw, method = "BH")
+
+  sig_label <- function(p) {
+    dplyr::case_when(p < 0.001 ~ "***", p < 0.01 ~ "**", p < 0.05 ~ "*", TRUE ~ "ns")
+  }
+
+  # ---- Phase 3: build combined long data.frame ----
+  plot_df <- purrr::imap_dfr(results, function(res, idx) {
+    annotation_str <- paste(head(res$annotations, 2), collapse = ", ")
+    res$proportions_df %>%
+      mutate(
+        program   = res$col_i,
+        facet_label = paste0(res$col_i, "\n(", annotation_str, ")"),
+        adj_p     = p_adj[[idx]],
+        sig       = sig_label(p_adj[[idx]])
+      )
+  })
+
+  # significance bracket positions per facet
+  bracket_df <- plot_df %>%
+    group_by(facet_label, sig, adj_p) %>%
+    summarise(
+      y_max   = max(proportion, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      y_lift  = pmax(y_max * 0.05, 0.005),
+      bar_y   = y_max + y_lift,
+      text_y  = bar_y + y_lift * 0.3,
+      y_upper = text_y + y_lift * 1.5,
+      label   = ifelse(
+        sig == "ns",
+        "n.s.",
+        paste0(sig, "\n(FDR p=", formatC(adj_p, digits = 4, format = "f"), ")")
+      )
+    )
+
+  plot_df <- plot_df %>%
+    left_join(bracket_df %>% select(facet_label, y_upper), by = "facet_label")
+
+  # ---- Phase 4: plot ----
+  n_cols   <- length(results)
+  diagnosis_order <- c("control", "case")
+  plot_df  <- plot_df %>%
+    mutate(diagnosis = factor(diagnosis, levels = diagnosis_order))
+
+  ggplot(plot_df, aes(x = diagnosis, y = proportion)) +
+    geom_boxplot(
+      outlier.shape = NA,
+      width         = 0.5,
+      fill          = "white",
+      color         = "black"
+    ) +
+    geom_jitter(
+      width = 0.15,
+      size  = 2,
+      alpha = 0.7,
+      color = "black"
+    ) +
+    geom_text(
+      data = bracket_df,
+      aes(x = 1.5, y = text_y, label = label),
+      inherit.aes = FALSE,
+      size        = 3,
+      vjust       = 0
+    ) +
+    geom_segment(
+      data = bracket_df,
+      aes(x = 1, xend = 1, y = bar_y, yend = bar_y + y_lift * 0.2),
+      inherit.aes = FALSE, linewidth = 0.5
+    ) +
+    geom_segment(
+      data = bracket_df,
+      aes(x = 2, xend = 2, y = bar_y, yend = bar_y + y_lift * 0.2),
+      inherit.aes = FALSE, linewidth = 0.5
+    ) +
+    geom_segment(
+      data = bracket_df,
+      aes(x = 1, xend = 2, y = bar_y + y_lift * 0.2, yend = bar_y + y_lift * 0.2),
+      inherit.aes = FALSE, linewidth = 0.5
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0))) +
+    coord_cartesian(ylim = c(0, NA), clip = "off") +
+    facet_wrap(~facet_label, ncol = 1, scales = "free_y") +
+    theme_minimal(base_size = 11) +
+    theme(
+      panel.grid   = element_blank(),
+      strip.text   = element_text(size = 8),
+      axis.text.x  = element_text(angle = 20, hjust = 1),
+      legend.position = "none",
+      axis.line    = element_line(color = "black"),
+      axis.ticks   = element_line(color = "black")
+    ) +
+    labs(
+      x = "Diagnosis",
+      y = "Proportion within Cell Type"
+    )
+}
+withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "bin_proportion_boxplots_80.pdf"), width=6, height=12, { 
+  plot_bin_proportion_boxplots(obs_df, programs = c("Ex_k3_score_bin80", "AST_k6_score_bin80", "Microglia_k8_score_bin80", "Ex_k9_score_bin80"), bin_num = "80") %>% print
+})
 
 message("Spatial analysis complete. Plots saved to: ", SPATIAL_PLOTS_DIR)
 

@@ -1895,7 +1895,6 @@ plot_by_subtype <- function(
   df_long_by_subtype$Name <- factor(df_long_by_subtype$Name, levels = cols_to_plot)
 
   p <- ggplot(df_long_by_subtype, aes(x = subtype, y = Score, fill = subtype)) +
-    # geom_boxplot(position = position_dodge(preserve = "single"), outlier.shape = NA, width = 0.65) +
     geom_violin(alpha = 1) +
     stat_summary(
       fun = mean, geom = "crossbar", width = 0.6, fatten = 2, color = "black", size = 0.6,
@@ -1935,7 +1934,7 @@ plot_by_subtype <- function(
 }
 
 
-## Figure 5c, Extended Data Figure 9b - validation Vulnerability analysis --------------
+## Figure 5d, Extended Data Figure 9b - validation Vulnerability analysis --------------
 (function(){
   project_to_donor_metadata_path <- list(
     "mit" = file.path(get_shared_dir(), "500_topics", "donor_meta_data.csv"),
@@ -1995,7 +1994,7 @@ plot_by_subtype <- function(
     comparisons <- list(c("SST", "PVALB"))
     subtype_colors <- c("SST" = "#ef6c00", "PVALB" = "#4db6ac")
 
-    withr::with_pdf(file.path(figures_dir, glue::glue("5c_validation_{project}_vulnerability_by_subtype_AD.pdf")), height = 12 + 2*length(cols_to_plot), {
+    withr::with_pdf(file.path(figures_dir, glue::glue("5d_validation_{project}_vulnerability_by_subtype_AD.pdf")), height = 12 + 2*length(cols_to_plot), {
         print(plot_by_subtype(df_long_by_subtype, cols_to_plot=cols_to_plot, comparisons=comparisons, sample_id_column=sample_id_column, subtype_colors=subtype_colors))
     })
   }
@@ -2362,6 +2361,78 @@ plot_by_subtype <- function(
 })()
 
 
+#+++++++++++++++++++++++++++
+## Extended Data Figure 8c,d - signature unique correlation --------------
+#+++++++++++++++++++++++++++
+
+(function() {
+  cell.types <- c("inhibitory", "cux2p", "cux2m")
+  cell.types.names <- c("Inh", "Exc upper layers", "Exc lower layers")
+
+  for (ct_index in 1:length(cell.types)) {
+    ct <- cell.types[[ct_index]]
+
+    Sig <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/SignatureUnique"))
+
+    # inhibitory columns are already named by annotation group;
+    # cux2p/cux2m columns are named by topic number — extract and prefix
+    if (ct == "inhibitory") {
+      sig_cols <- paste0("SignatureUnique_", names(neuronal_topics_to_annotation))
+    } else {
+      topic_nums <- lapply(neuronal_topics_to_annotation,
+                           function(x) str_extract(names(x)[ct_index], "k.*")) %>% unlist
+      sig_cols <- paste0("SignatureUnique_", topic_nums)
+    }
+
+    Sig <- Sig %>% dplyr::select(all_of(sig_cols))
+    colnames(Sig) <- names(neuronal_topics_to_annotation)
+
+    c <- correlate_dataframes(Sig, Sig)
+
+    add_significance <- TRUE
+    if (add_significance) {
+      corr.sig <- c$sig
+      corr.sig[corr.sig == '****'] <- '**'
+      corr.sig[corr.sig == '***'] <- '**'
+      cell_fun <- function(j, i, x, y, w, h, fill) {
+        grid.text(sprintf("%.2f\n%s", c$corr[i, j], corr.sig[i, j]), x, y,
+                  gp = gpar(fontsize = 8))
+      }
+    } else {
+      cell_fun <- NULL
+    }
+
+    legend <- Legend(title = "adj.pval", pch = c("*", "**"), type = "points",
+                     labels = c("<0.05", "<0.01"))
+    correlation.legend <- Legend(title = "correlation", col_fun = cyan2orange.correlation)
+
+    withr::with_pdf(file.path(figures_dir, glue::glue("8SuplC_{ct}.pdf")),
+                    height = embed.height * 1.5, width = embed.width * 1.5, {
+      ComplexHeatmap::Heatmap(c$corr,
+                              column_title_gp = gpar(fontsize = 10, fontface = "bold"),
+                              col = cyan2orange.correlation,
+                              clustering_distance_rows = "spearman",
+                              clustering_distance_columns = "spearman",
+                              show_row_dend = FALSE,
+                              show_column_dend = FALSE,
+                              show_heatmap_legend = FALSE,
+                              cluster_rows = FALSE,
+                              cluster_columns = FALSE,
+                              column_names_rot = 90,
+                              show_row_names = TRUE,
+                              width  = ncol(c$corr) * unit(7 * 5, "mm"),
+                              height = ncol(c$corr) * unit(7 * 5, "mm"),
+                              show_column_names = TRUE,
+                              cell_fun = cell_fun
+      ) %>% draw(
+        annotation_legend_list = list(legend, correlation.legend),
+        column_title = glue::glue("{cell.types.names[[ct_index]]} - signature unique correlation across cells")
+      )
+    })
+  }
+})()
+
+
 ## Extended Data Figure 8c,d,e - program density and thresholds -------------
 (function (){
   cts <- c("inhibitory", "cux2p", "cux2m")
@@ -2375,6 +2446,86 @@ plot_by_subtype <- function(
       print(plot_topic_quantiles(df, "cell_cycle_topic_score", quantiles_cell_cycle, title = glue::glue('{ct}\ncell cycle program histogram')))
     })
   }
+})()
+
+
+#+++++++++++++++++++++++++++
+## Extended Data Figure 8g - increasing signature score correlation barplot
+#+++++++++++++++++++++++++++
+(function () {
+  cell.types <- c("inhibitory", "cux2p", "cux2m")
+  cell.types.names <- c("Inhibitory", "Exc upper layers", "Exc lower layers")
+  results <- list()
+
+  for (ct_index in seq_along(cell.types)) {
+    ct <- cell.types[[ct_index]]
+
+    Sig <- tryCatch({
+      h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/SignatureUnique"))
+    }, error = function(e) {
+      message(glue::glue("Could not read SignatureUnique for {ct}: {e$message}"))
+      NULL
+    })
+    if (is.null(Sig)) next
+
+    if (ct == "inhibitory") {
+      sig_cols <- paste0("SignatureUnique_", names(neuronal_topics_to_annotation))
+    } else {
+      topic_nums <- lapply(neuronal_topics_to_annotation,
+                           function(x) str_extract(names(x)[ct_index], "k.*")) %>% unlist
+      sig_cols <- paste0("SignatureUnique_", topic_nums)
+    }
+
+    Sig <- Sig %>% dplyr::select(all_of(sig_cols))
+    colnames(Sig) <- names(neuronal_topics_to_annotation)
+
+    c <- correlate_dataframes(Sig, Sig)
+
+    prog_names <- colnames(Sig)
+    prog_names <- gsub("^increasing_early$", "increasing-1", prog_names)
+    prog_names <- gsub("^increasing_late$", "increasing-2", prog_names)
+    dimnames(c$corr) <- list(prog_names, prog_names)
+    dimnames(c$adj.pval) <- list(prog_names, prog_names)
+
+    results[[ct]] <- data.frame(
+      cell_type = cell.types.names[[ct_index]],
+      correlation = c$corr["increasing-1", "increasing-2"],
+      p_adj = c$adj.pval["increasing-1", "increasing-2"],
+      stringsAsFactors = FALSE
+    )
+  }
+
+  if (length(results) == 0) {
+    message("No signature score correlations computed for increasing programs.")
+    return()
+  }
+
+  plot_df <- bind_rows(results)
+  plot_df$cell_type <- factor(plot_df$cell_type, levels = cell.types.names)
+
+  plot_df$asterisk <- ""
+  plot_df$asterisk[!is.na(plot_df$p_adj) & plot_df$p_adj < 0.01] <- "**"
+  plot_df$label <- sprintf("%.2f%s", plot_df$correlation, plot_df$asterisk)
+
+  plot_file_path <- file.path(figures_dir, "8SuplG_increasing_signature_correlation_barplot.pdf")
+  withr::with_pdf(plot_file_path, width = 6, height = 5, {
+    p <- ggplot(plot_df, aes(x = cell_type, y = correlation)) +
+      geom_col(width = 0.6, fill = "#008585") +
+      geom_hline(yintercept = 0, color = "gray50", linetype = "dashed") +
+      geom_text(aes(label = label),
+                vjust = ifelse(plot_df$correlation >= 0, -0.3, 1.3),
+                size = 3.5) +
+      labs(
+        title = "Correlation between increasing signature scores",
+        x = NULL,
+        y = "Spearman correlation"
+      ) +
+      theme_classic(base_size = 11) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    print(p)
+  })
+
+  message(glue::glue("Increasing signature score correlation barplot saved to {plot_file_path}"))
 })()
 
 
@@ -2556,7 +2707,7 @@ plot_by_subtype <- function(
   }
 })()
 
-# Figure 4h, Extended Data Figure 8j,k -  numbers of cell cycle cells start vs prAD
+# Figure 4h, Extended Data Figure 8k,l -  numbers of cell cycle cells start vs prAD
 
 (function (){
   cts <- c("inhibitory", "cux2p", "cux2m")
@@ -2564,12 +2715,12 @@ plot_by_subtype <- function(
     prop_cells_df <- get_AD_programs_proportion(ct)
     prop_cells_df <- prop_cells_df %>% filter(!is.na(group) & group != 'NA')
     quantiles <- c("95", "90", "80")
-    
-    withr::with_pdf(file.path(figures_dir, glue::glue("4h_number_of_cell_start_vs_prAD_{ct}.pdf")), width = embed.width, height = embed.height, {
+
+    withr::with_pdf(file.path(figures_dir, glue::glue("4h_number_of_cell_start_vs_prAD_{ct}_boxplot.pdf")), width = embed.width, height = embed.height, {
       for (q in quantiles) {
-        print(ggbarplot(prop_cells_df, x="group",
-                        y=glue::glue("prop_cell_cycle_{q}"), fill="group",  width = 0.9,
-                        add = c("mean_se")) + 
+        print(ggboxplot(prop_cells_df, x="group",
+                    y=glue::glue("prop_cell_cycle_{q}"), fill="group",
+                    outlier.shape = NA) +
                 stat_compare_means(comparisons=list(c('prAD', 'start')), label = "p.signif") +
                 theme_minimal() +
                 theme(panel.border = element_blank(),
@@ -2578,7 +2729,6 @@ plot_by_subtype <- function(
                 scale_fill_manual(values=c("start"="#74a892",
                                            "prAD"="#c7522a")))
       }
-
     })
   }
 })()
@@ -2768,11 +2918,45 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
   })
 })()
 
+## Figure 5c - SST vs PVALB cell-cycle and stress/apoptosis scores ------
+(function (){
+  ct <- 'inhibitory'
+  SUBTYPE_MIN_N_CELLS <- 1000
+
+  df <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/cell_cycle_apoptosis"))
+
+  removed_subtypes <- df %>%
+    dplyr::count(pruned_subtype) %>%
+    filter(n < SUBTYPE_MIN_N_CELLS) %>%
+    pull(pruned_subtype)
+
+  dynamics_features <- df %>%
+    filter(pruned_subtype != 'NA' & !(pruned_subtype %in% removed_subtypes)) %>%
+    group_by(projid, pruned_subtype, group) %>%
+    summarise(
+      cell_cycle_topic_score  = mean(cell_cycle_topic_score),
+      apoptosis_topic_score   = mean(apoptosis_topic_score),
+      .groups = "drop"
+    )
+
+  programs <- list(
+    list(score_col = "cell_cycle_topic_score", label = "Cell cycle"),
+    list(score_col = "apoptosis_topic_score",  label = "Stress / apoptosis")
+  )
+
+  for (prog in programs) {
+    withr::with_pdf(
+      file.path(figures_dir, glue::glue("5c_{ct}_{prog$score_col}_SST_vs_PVALB.pdf")),
+      width = embed.width, height = embed.height * 1.1,
+    {
+      print(make_sst_vs_pvalb_plot(dynamics_features, prog$score_col, prog$label, ct))
+    })
+  }
+})()
+
 # Figure 4j -  senescence like genes signature -----
 (function (){
-  cts <- c("inhibitory", "cux2m"
-    #, "cux2p"
-  )
+  cts <- c("inhibitory")
   for (ct in cts) {
     df <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/cell_cycle_apoptosis"))
     senescence_like_genes_df <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/senescence_like_genes.signatures"))
@@ -2813,7 +2997,7 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
   }
 })()
 
-## Figure 5d - synaptic signatures in cell cycle or apoptosis -----
+## Figure 5e - synaptic signatures in cell cycle or apoptosis -----
 (function (){
   cts <- c("inhibitory", "cux2p", "cux2m")
   for (ct in cts) {
@@ -2867,7 +3051,7 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
         label = signif_labels
       )
       
-      withr::with_pdf(file.path(figures_dir, glue::glue("5d_siganture_{ct}_{feature}.pdf")), width = embed.width, height = embed.height, {
+      withr::with_pdf(file.path(figures_dir, glue::glue("5e_siganture_{ct}_{feature}.pdf")), width = embed.width, height = embed.height, {
         print(ggviolin(df, x="cell_group", fill="cell_group", y=feature, legend.title='cell group') + 
                 stat_summary(fun = mean, geom = "crossbar", width = 0.3, color = "black") + 
                 geom_signif(
@@ -3459,7 +3643,7 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
   })
 })()
 
-## Extended Data Figure 10d - neuronal dynamics in the ABA in green et al trajectories
+## Extended Data Figure 10f - neuronal dynamics in the ABA in green et al trajectories
 
 (function () {
   group_names <- c("decreasing_early", "decreasing_late", "increasing_early", "increasing_late")
