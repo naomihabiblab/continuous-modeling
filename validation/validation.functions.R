@@ -124,7 +124,7 @@ get_pathway_signatures <- function(cell.type) {
     }
     
     
-    if(cell.type %in% c("inhibitory", "excitatory")) {
+    if(cell.type %in% c("inhibitory", "excitatory", "cux2p", "cux2m")) {
     
         pathways_to_name_and_topic_group <- list(
         "hsa04721" = c("Synaptic vesicle cycle", "increasing_early"),
@@ -150,9 +150,11 @@ get_pathway_signatures <- function(cell.type) {
             group <- neuronal_topics_to_annotation[[group_name]]
             de <- read.dataset.for.topics(names(group), dataset_path = "/de") 
             if (cell.type == "inhibitory") {
-                de <- de %>% filter(.data[['cell.type']] == .env[['cell.type']])
+                de <- de %>% filter(.data[['cell.type']] == "inhibitory")
             } else if (cell.type == "excitatory") {
                 de <- de %>% filter(.data[['cell.type']] %in% c("cux2p", "cux2m"))
+            } else if (cell.type %in% c("cux2p", "cux2m")) {
+                de <- de %>% filter(.data[['cell.type']] == .env[['cell.type']])
             }
 
             if (pathway_id == "antinsense") {

@@ -72,7 +72,7 @@ associate.traits <- function(traits, covariates, controls, p.adjust.method="BH")
       m <- summary(lm(formula, df[!is.na(df[,trait]), ]))
       
       data.frame(trait = trait, 
-                 covariate = covariates_orginal_names[[covariate]],
+                 covariate = covariates_original_names[[covariate]],
                  beta  = m$coefficients[covariate, 1],
                  se = m$coefficients[covariate, 2],
                  tstat = m$coefficients[covariate, 3],

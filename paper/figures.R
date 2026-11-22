@@ -16,6 +16,7 @@ source("R/pathway_dynamics.R")
 source("R/utils.R")
 source("R/visualizations.R")
 source("validation/validation.functions.R")
+source("R/source_data.R")
 
 
 options(ggrastr.default.dpi=900)
@@ -54,7 +55,9 @@ AD_TRAITS_NAMES <- c(amyloid_mf_sqrt="Neocortical amyloid",
                      cogng_random_slope="Cognitive decline",
                      cogng_demog_slope="Cognitive decline")
 
-figures_dir <- file.path(get_result_dir(), "figures")
+# set FIGURES_DIR to write re-generated figures elsewhere (paper/run_figure_blocks.R does)
+figures_dir <- Sys.getenv("FIGURES_DIR", file.path(get_result_dir(), "figures"))
+get_plots_dir <- get_result_dir  # spatial data is under Plots/spatial
 dir.create(figures_dir, showWarnings = FALSE)
 
 
@@ -106,9 +109,10 @@ function() {
     # change the order of dark and light colors
     cols <- sample(cols)
     title <- switch(ct, "cux2+"="Exc. L2-3", "cux2-"="Exc. L4-6", opc="OPC", str_to_title(ct))
-    ggrastr::rasterise(fastTopics::structure_plot(fits[[ct]], colors=cols,
+    sd_tee(ggrastr::rasterise(fastTopics::structure_plot(fits[[ct]], colors=cols,
                    n=5000
-    )) + theme_void() + labs(title=title) + theme(legend.position="none", plot.title = element_text(hjust = 0.5))
+    )) + theme_void() + labs(title=title) + theme(legend.position="none", plot.title = element_text(hjust = 0.5)),
+    "Fig1", "b", ct, description = glue::glue("{ct}: program proportions (prop) per cell for the 5,000 cells drawn by structure_plot (long format)"))
   }) %>% plot_grid(plotlist=., nrow = 1)
 
   withr::with_pdf(file.path(figures_dir, "1b_rasterise.pdf"), width = embed.width*2, height = embed.height, {
@@ -127,10 +131,14 @@ function() {
                                'oligo'=c("p5", "p6", "p8"))
 
   scales <- list('microglia'=scale_x_continuous(trans = squash_axis(-10, -6, 98)))
+  SD <- list(astrocytes=c("Fig1", "c"), microglia=c("ED2", "b"), oligo=c("ED2", "e"), opcs=c("ED3", "a"))
   for (ct in names(cell_types_to_topics)) {
     embedding <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/umap.densities"))
 
     embedding <- embedding %>% rename_with(~gsub("X\\d+.k", "p", .x) %>% gsub(".sim.umap", "", .))
+    sd_add(embedding %>% dplyr::select(any_of(c("cell", "UMAP_1", "UMAP_2", "state")), all_of(cell_types_to_topics[[ct]])),
+           SD[[ct]][1], SD[[ct]][2], ct,
+           description = glue::glue("{ct}: per-cell UMAP coordinates, Green et al. state, and locally smoothed program densities ({paste(cell_types_to_topics[[ct]], collapse=', ')})"))
 
     if (ct %in% names(scales)) {
       scale <- scales[[ct]]
@@ -168,6 +176,8 @@ function() {
                             )
 
 
+  SD <- list(microglia=c("ED2", "c"), oligo=c("ED2", "f"), opcs=c("ED3", "b"),
+             inhibitory=c("ED4", "a"), cux2p=c("ED4", "b"), cux2m=c("ED4", "c"), astrocytes=c("ED4", "d"))
   for (cell.type in names(cell_type_to_genes)) {
     des <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[cell.type], "/de"))
     F_mat <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[cell.type], "/F"))
@@ -176,7 +186,8 @@ function() {
       plot_F_matrix(F_mat, des, col=cyan2orange(10),
                     column_title=glue::glue("{str_to_sentence(cell.type)} programs gene score"),
                     marked_genes = cell_type_to_genes[[cell.type]],
-                    ) %>% print()
+                    ) %>% sd_tee(SD[[cell.type]][1], SD[[cell.type]][2], cell.type,
+                                 description = glue::glue("{cell.type}: gene score (F) of top DE genes per program, scaled per gene, rows in displayed order")) %>% print()
     })
   }
 
@@ -194,10 +205,11 @@ function() {
     astrocytes=c("5", "3", "8","2","10", "4","6", "1", "7", "9"),
     opcs=c(3, 7, 5, 6, 4, 2, 1),
     microglia=c(3, 9, 7, 6, 5, 15, 13, 11, 8, 4, 1, 2, 10, 12, 14),
-    oligo=c(1, 6, 3, 5, 2, 8, 7, 4),
+    oligo=c(1, 6, 3, 5, 2, 8, 7, 4)
   )
+  SD <- list(astrocytes=c("Fig1", "d"), microglia=c("ED2", "d"), oligo=c("ED2", "g"), opcs=c("ED3", "c"))
 
-  for (ct in names(cell.type.to.prefix)) {
+  for (ct in names(programs_order)) {
     abundance.data <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/abundance.state"))
     abundance.data <- abundance.data %>% mutate(variable=paste0(cell.type.to.prefix[[ct]],".p", variable))
 
@@ -219,7 +231,9 @@ function() {
                 legend_direction = "horizontal"
               ),
               col = circlize::colorRamp2(c(0, max(abundance.data)), c("white", "#c7522a"))
-      ) %>% draw(heatmap_legend_side = "bottom")
+      ) %>% draw(heatmap_legend_side = "bottom") %>%
+        sd_tee(sd_lookup(SD, ct)[1], sd_lookup(SD, ct)[2], ct,
+               description = glue::glue("{ct}: mean program score per Green et al. state (rows) and program (columns)"))
     })
   }
 
@@ -245,6 +259,9 @@ function() {
 
 
     gb <- ct_to_group_by[[ct]]
+    sd_add(embedding %>% dplyr::select(x, y, all_of(gb), all_of(ct_to_topics[[ct]])),
+           if (ct == "inhibitory") "Fig1" else NA, "f", ct,
+           description = glue::glue("{ct}: per-cell UMAP coordinates (x, y), Allen subtype ({gb}) and locally smoothed program densities"))
 
     # Plot UMAP embedding of atlas
     withr::with_pdf(file.path(figures_dir, glue::glue("1f_{ct}_{gb}.pdf")), {
@@ -280,6 +297,7 @@ function() {
 ## Figure 1e Neurons sub-type -------------------
 
 (function () {
+  test.col <- colorRampPalette(c("white", "#4db6ac", "#ef6c00"))(21)
   class_to_panel <- c("inhibitory"='e')
   class_to_plot_dim <- list("inhibitory"=list(w=embed.width * 0.8, h=embed.height))
   for (neuronal_class in c("inhibitory")) {
@@ -353,7 +371,9 @@ function() {
                 title = "Program mean score",
                 legend_direction = "horizontal"
               ),
-              show_row_names = TRUE, name = "Mean program score") %>% draw(heatmap_legend_side = "bottom")
+              show_row_names = TRUE, name = "Mean program score") %>% draw(heatmap_legend_side = "bottom") %>%
+        sd_tee("Fig1", class_to_panel[[neuronal_class]], neuronal_class,
+               description = "Mean program score (rows) per Allen Brain Map class (columns)")
       })
   }
 })()
@@ -364,6 +384,7 @@ function() {
 ## Extended Data Figure 1a,b -----------
 
 (function (){
+SD <- list(astrocytes=c("ED1", "a"), inhibitory=c("ED1", "b"))
 for (ct in names(CELL_TYPE_TO_K)) {
     for (k_diff in c(-1, 1)) {
       message(glue::glue("Plotting L correlation for {ct} diff of {k_diff}"))
@@ -409,7 +430,10 @@ for (ct in names(CELL_TYPE_TO_K)) {
                                 column_title_side = 'bottom',
                                 show_heatmap_legend =FALSE,
                                 cell_fun = cell_fun) %>% draw(annotation_legend_list=list(legend, correlation.legend),
-                                                              column_title=glue::glue("Different k {ct} cell score correlation"))
+                                                              column_title=glue::glue("Different k {ct} cell score correlation")) %>%
+          sd_tee(sd_lookup(SD, ct)[1], sd_lookup(SD, ct)[2], glue::glue("{ct}_k{k}_vs_k{other_k}"),
+                 description = glue::glue("{ct}: Spearman correlation across cells of program scores, k={k} (rows) vs k={other_k} (columns), displayed order"))
+        sd_corr(c, sd_lookup(SD, ct)[1], sd_lookup(SD, ct)[2], glue::glue("{ct}_k{k}_vs_k{other_k}"))
       })
 
     }
@@ -458,7 +482,9 @@ for (ct in names(CELL_TYPE_TO_K)) {
                               column_title = 'Random subset cells fit',
                               column_title_side = 'bottom',
                               show_heatmap_legend =FALSE,
-                              cell_fun = cell_fun) %>% draw(annotation_legend_list=list(legend, correlation.legend), column_title=glue::glue("Cells correlation {ct} all and random subset"))
+                              cell_fun = cell_fun) %>% draw(annotation_legend_list=list(legend, correlation.legend), column_title=glue::glue("Cells correlation {ct} all and random subset")) %>%
+        sd_tee("ED1", "c", ct, description = glue::glue("{ct}: Spearman correlation across cells, all-cells fit (rows) vs random-subset fit (columns), displayed order"))
+      sd_corr(c, "ED1", "c", ct)
     })
 
   }
@@ -474,17 +500,23 @@ for (ct in names(CELL_TYPE_TO_K)) {
                                     params=c("sqrt.amyloid_mf",  "sqrt.tangles_mf", "cogng_demog_slope"),
                                     column_labels=AD_TRAITS_NAMES,
                                     row_labels=QC_NAMES,
-                                    row.by='covariate', show.only.significant = F)
+                                    row.by='covariate', show.only.significant = F) %>%
+      sd_tee("ED4", "e", "sample_qc", description = "t statistic of association to AD traits (displayed order); stars from adjusted p in the _stats table")
+    sd_trait(data$uns$trait.analysis.to.sample.qc, c("sqrt.amyloid_mf",  "sqrt.tangles_mf", "cogng_demog_slope"), "ED4", "e", "sample_qc")
 
     plot.trait.associations.heatmap(data$uns$trait.analysis.to.mean.count, 
                                     params=c("sqrt.amyloid_mf",  "sqrt.tangles_mf", "cogng_demog_slope"),
                                     column_labels=AD_TRAITS_NAMES, row_title="Mean count",
-                                    row.by='covariate', show.only.significant = F)
+                                    row.by='covariate', show.only.significant = F) %>%
+      sd_tee("ED4", "e", "mean_count", description = "t statistic of association to AD traits (displayed order); stars from adjusted p in the _stats table")
+    sd_trait(data$uns$trait.analysis.to.mean.count, c("sqrt.amyloid_mf",  "sqrt.tangles_mf", "cogng_demog_slope"), "ED4", "e", "mean_count")
 
     plot.trait.associations.heatmap(data$uns$trait.analysis.to.number.of.features, 
                                     params=c("sqrt.amyloid_mf",  "sqrt.tangles_mf", "cogng_demog_slope"),
                                     column_labels=AD_TRAITS_NAMES, row_title="Number of features",
-                                    row.by='covariate', show.only.significant = F)
+                                    row.by='covariate', show.only.significant = F) %>%
+      sd_tee("ED4", "e", "n_features", description = "t statistic of association to AD traits (displayed order); stars from adjusted p in the _stats table")
+    sd_trait(data$uns$trait.analysis.to.number.of.features, c("sqrt.amyloid_mf",  "sqrt.tangles_mf", "cogng_demog_slope"), "ED4", "e", "n_features")
   })
 })()
 
@@ -513,7 +545,9 @@ for (ct in names(CELL_TYPE_TO_K)) {
   c <- list(
     corr=cbind(c_sst$corr, c_pv$corr),
     adj.pval=cbind(c_sst$adj.pval, c_pv$adj.pval),
-    sig=cbind(c_sst$sig, c_pv$sig)
+    sig=cbind(c_sst$sig, c_pv$sig),
+    pval=cbind(c_sst$pval, c_pv$pval),   # source-data fix: keep the unadjusted P and n for the source data
+    n=cbind(c_sst$n, c_pv$n)
   )
 
   corr.sig <- c$sig
@@ -546,13 +580,16 @@ for (ct in names(CELL_TYPE_TO_K)) {
                             show_heatmap_legend =FALSE,
                             column_split=factor(c(rep('SST fit',ncol(L_sst)), rep('PV fit',ncol(L_pv))),
                                                 levels = c('SST fit', 'PV fit')),
-                            cell_fun = cell_fun) %>% draw(annotation_legend_list=list(legend, correlation.legend))
+                            cell_fun = cell_fun) %>% draw(annotation_legend_list=list(legend, correlation.legend)) %>%
+      sd_tee("ED1", "d", "inhibitory", description = "Spearman correlation across inhibitory cells, all-inhibitory fit (rows) vs SST / PVALB subtype fits (columns), displayed order")
+    sd_corr(c, "ED1", "d", "inhibitory")
   })
 })()
 
 
 ## Extended Data Figure 1e,f - scHPF programs -------------
 (function() {
+  SD <- list(inhibitory=c("ED1", "e"), astrocytes=c("ED1", "f"))
   for (ct in c("inhibitory", "astrocytes")) {
     L <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/L")) %>% column_to_rownames("cell")
     L <- L %>% rename_with(~ gsub("^k", "p", .x))
@@ -614,7 +651,9 @@ for (ct in names(CELL_TYPE_TO_K)) {
                               show_heatmap_legend =FALSE,
                               cell_fun = cell_fun,
                               width = ncol(c$corr)*unit(5, "mm"),
-                              height = nrow(c$corr)*unit(5, "mm")) %>% draw(annotation_legend_list=list(legend, correlation.legend), column_title=glue::glue("Cells correlation {ct} fastTopics and scHPF"))
+                              height = nrow(c$corr)*unit(5, "mm")) %>% draw(annotation_legend_list=list(legend, correlation.legend), column_title=glue::glue("Cells correlation {ct} fastTopics and scHPF")) %>%
+        sd_tee(SD[[ct]][1], SD[[ct]][2], c(ct, "correlation"), description = glue::glue("{ct}: Pearson correlation across cells, fastTopics (rows) vs scHPF (columns) program scores, displayed order"))
+      sd_corr(c, SD[[ct]][1], SD[[ct]][2], c(ct, "correlation"))
 
       ComplexHeatmap::Heatmap(gene_overlap_mat,
                                 col = circlize::colorRamp2(c(0, 1), white2orange(2)),
@@ -629,17 +668,18 @@ for (ct in names(CELL_TYPE_TO_K)) {
                                 show_row_dend = FALSE,
                                 show_column_dend = FALSE,
                                 width = ncol(gene_overlap_mat)*unit(5, "mm"),
-                                height = nrow(gene_overlap_mat)*unit(5, "mm")) %>% draw
+                                height = nrow(gene_overlap_mat)*unit(5, "mm")) %>% draw %>%
+        sd_tee(SD[[ct]][1], SD[[ct]][2], c(ct, "gene_overlap"), description = glue::glue("{ct}: overlap coefficient of fastTopics DE genes and top-150 scHPF genes, displayed order"))
     })
   } 
 })()
 
 ## Extended Data Figure 2a - projid abundance ----------------------
 (function() {
-  for (ct in names(CELL_TYPE_TO_GROUP)) {
+  for (ct in setdiff(names(CELL_TYPE_TO_GROUP), "excitatory")) {
     abundance.projid <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/abundance.projid"))
     withr::with_pdf(file.path(figures_dir, paste0("2SupA_projid_abundance_", ct, ".pdf")), height=embed.height, width=embed.width.small * 0.9, {
-      print(abundance.projid %>%
+      print(sd_tee(abundance.projid %>%
             arrange(as.integer(variable)) %>%
             mutate(topic=paste0(cell.type.to.prefix[[ct]] ,".p", as.character(variable))) %>%
             mutate(topic=factor(topic, levels = unique(topic))) %>%
@@ -651,7 +691,8 @@ for (ct in names(CELL_TYPE_TO_K)) {
             labs(x=NULL, y=NULL) +
             theme_classic() +
             theme(legend.position = "none") +
-            coord_flip()
+            coord_flip(),
+            "ED2", "a", ct, description = glue::glue("{ct}: per-individual mean program abundance (avg) per program (violin data)"))
       )
     })
   }
@@ -733,6 +774,7 @@ LAYERS_COLORS <- c("L1"="#1B9E77", "L1-2"="#8DD3C7", "L1-3"="#66A61E", "L1-5"="#
 
   neuronal_class_to_df <- list("inhibitory"=df_inhibitory, "excitatory"=df_exc)
 
+  SD <- list(inhibitory=c("ED3", "d"), excitatory=c("ED3", "e"))
   for (neuronal_class in c("inhibitory", "excitatory")) {
     df <- neuronal_class_to_df[[neuronal_class]]
 
@@ -791,7 +833,11 @@ LAYERS_COLORS <- c("L1"="#1B9E77", "L1-2"="#8DD3C7", "L1-3"="#66A61E", "L1-5"="#
                   ),
                   show_row_names = FALSE,
                   show_column_names = FALSE,
-                  name="Mean program score") %>% draw()
+                  name="Mean program score") %>% draw() %>%
+            sd_tee(SD[[neuronal_class]][1], SD[[neuronal_class]][2], neuronal_class,
+                   description = glue::glue("{neuronal_class}: mean program score (rows) per Allen Brain Map subtype (columns), displayed order"))
+          sd_add(neuronal.subtypes %>% tibble::rownames_to_column("subtype"), SD[[neuronal_class]][1], SD[[neuronal_class]][2],
+                 c(neuronal_class, "subtype_annotation"))
     })
   }
 
@@ -835,6 +881,7 @@ LAYERS_COLORS <- c("L1"="#1B9E77", "L1-2"="#8DD3C7", "L1-3"="#66A61E", "L1-5"="#
   trait_analysis_to_file <- list(main="1g_trait_assocation_test.pdf",
                                  batch_mixed_model="4SuplF_trait_assocation_batch_mixed_model.pdf")
 
+  SD <- list(main=c("Fig1", "g"), batch_mixed_model=c("ED4", "f"))
   for (program_trait_analysis_name in names(programs_trait_analsysis)) {
     program_trait_analysis <- programs_trait_analsysis[[program_trait_analysis_name]]
 
@@ -893,8 +940,11 @@ LAYERS_COLORS <- c("L1"="#1B9E77", "L1-2"="#8DD3C7", "L1-3"="#66A61E", "L1-5"="#
                     type = "points", labels = c("<0.001","<0.01", "<0.05"))
 
     withr::with_pdf(file.path(figures_dir, trait_analysis_to_file[[program_trait_analysis_name]]), width=embed.width * 0.7, height = embed.height * 2, {
-        draw(hm, annotation_legend_list = list(legend), merge_legend=T, column_title=program_trait_analysis_name)
+        draw(hm, annotation_legend_list = list(legend), merge_legend=T, column_title=program_trait_analysis_name) %>%
+          sd_tee(SD[[program_trait_analysis_name]][1], SD[[program_trait_analysis_name]][2],
+                 description = "t statistic of program association to AD traits (displayed order); stars from adjusted p in the _stats table")
     })
+    sd_add(df, SD[[program_trait_analysis_name]][1], SD[[program_trait_analysis_name]][2], "stats")
   }
  })()
 
@@ -946,7 +996,9 @@ LAYERS_COLORS <- c("L1"="#1B9E77", "L1-2"="#8DD3C7", "L1-3"="#66A61E", "L1-5"="#
                             height=unit(length(topics) * 7, "mm"),
                             cell_fun = cell_fun, show_heatmap_legend =FALSE) %>%
                             draw(annotation_legend_list=list(legend, correlation.legend),
-                            column_title=glue::glue("Programs correlation across individual"))
+                            column_title=glue::glue("Programs correlation across individual")) %>%
+      sd_tee("Fig2", "a", "correlation", description = "Left: Spearman correlation across individuals of neuronal program abundance (sqrt), displayed order")
+    sd_corr(c, "Fig2", "a", "correlation")
   })
 
 })
@@ -983,7 +1035,8 @@ LAYERS_COLORS <- c("L1"="#1B9E77", "L1-2"="#8DD3C7", "L1-3"="#66A61E", "L1-5"="#
             #   grid.text(sprintf("%.1f", mat[i, j]), x, y, gp = gpar(fontsize = 10))},
             col=circlize::colorRamp2(c(0, 1), c("white", "#ef6c00")),
             show_column_dend = FALSE, show_row_dend = FALSE,) %>%
-                                draw(column_title=glue::glue("Programs signature jaccard index"))
+                                draw(column_title=glue::glue("Programs signature jaccard index")) %>%
+      sd_tee("Fig2", "a", "jaccard", description = "Right: Jaccard index between program signatures (DE genes), displayed order")
   })
 
 })()
@@ -997,6 +1050,10 @@ LAYERS_COLORS <- c("L1"="#1B9E77", "L1-2"="#8DD3C7", "L1-3"="#66A61E", "L1-5"="#
     "#56B4E9", "#A3C8DA", "lightgray", "#db836b", "#c7522a", "#ad4623"
   ), bias=0.4)
 
+  phate <- data$obsm[["X_phate"]]
+  sd_add(data.frame(individual = data$obs_names, PHATE_1 = phate[, 1], PHATE_2 = phate[, 2]) %>%
+           dplyr::left_join(df_branch %>% tibble::rownames_to_column("individual") %>% mutate(diff = prAD - ABA), by = "individual"),
+         "Fig2", "b", description = "Per individual: PHATE coordinates, prAD and ABA branch probabilities, colour = prAD - ABA")
   withr::with_pdf(file.path(figures_dir, "2b_phate.pdf"), width=embed.width, height=embed.height, {
     plot.landscape(df_branch %>% mutate(diff=prAD-ABA) %>% dplyr::select(diff),
                    smoothened = F, size = 3, cols = pallet, 
@@ -1014,6 +1071,8 @@ AD.traits        <- c(sqrt.amyloid_mf="neocortical amyloid", sqrt.tangles_mf="ne
 AD.traits.colors <- c(sqrt.amyloid_mf="midnightblue", sqrt.tangles_mf="olivedrab4", cogng_demog_slope="firebrick3")
 
 (function() {
+  sd_dynamics(data$uns$trajectories$palantir$dynamics, names(AD.traits), "Fig2", "c", labels = AD.traits,
+              description = "AD trait dynamics along prAD and ABA pseudotime: per-individual values and fitted curve (fit +/- 2 se.fit)")
   withr::with_pdf(file.path(figures_dir, glue::glue("2c_trait_dynamics.pdf")), width=embed.width, height=embed.height*1.75, {
     plot_grid(plotlist = lapply(names(AD.traits), function(trait)
       plot.dynamics.wrapper(dynamics = data$uns$trajectories$palantir$dynamics,
@@ -1030,6 +1089,8 @@ AD.traits.colors <- c(sqrt.amyloid_mf="midnightblue", sqrt.tangles_mf="olivedrab
 ## Extended Data Figure 5c - trait dynamics with points --------
 
 (function() {
+  sd_dynamics(data$uns$trajectories$palantir$dynamics, names(AD.traits), "ED5", "c", labels = AD.traits,
+              description = "AD trait dynamics with individuals (dots): per-individual values, trajectory weights and fitted curve")
   withr::with_pdf(file.path(figures_dir, glue::glue("5SuplC_trait_dynamics_dots.pdf")), width=embed.width, height=embed.height*1.75, {
     plot_grid(plotlist = lapply(names(AD.traits), function(trait)
       plot.dynamics.wrapper(dynamics = data$uns$trajectories$palantir$dynamics,
@@ -1056,8 +1117,11 @@ AD.traits.colors <- c(sqrt.amyloid_mf="midnightblue", sqrt.tangles_mf="olivedrab
                  "Oligodendrocytes"=c("Oligo.8.k8"="OLI.p8", "Oligo.8.k6"="OLI.p6"),
                  "Microglia"=c("Micro.15.k8"="MIC.p8", "Micro.15.k9"="MIC.p9"))
 
+  SD <- list('2d'=c("Fig2", "d"), '5SuplD'=c("ED5", "d"))
   for (option in dynamics_options) {
     for (group_name in names(groups)) {
+      sd_dynamics(option$dynamics, names(groups[[group_name]]), SD[[option$panel]][1], SD[[option$panel]][2], group_name,
+                  labels = groups[[group_name]], description = glue::glue("{group_name} program dynamics ({option$xlab})"))
       withr::with_pdf(file.path(figures_dir, glue::glue("{option$panel}_{group_name}.pdf")), width=embed.width, height=embed.height.small, {
         print(plot.dynamics.wrapper(option$dynamics,
                                     features = names(groups[[group_name]]),
@@ -1094,6 +1158,9 @@ AD.traits.colors <- c(sqrt.amyloid_mf="midnightblue", sqrt.tangles_mf="olivedrab
       features <- names(neuronal_topics_to_annotation[[group_name]])
       labels <- topic_names_mapping(features, use_static_mapping=FALSE)
       names(labels) <- features
+      SD <- list('2e'=c("Fig2", "e"), '5SuplE'=c("ED5", "e"))
+      sd_dynamics(option$dynamics, features, SD[[option$panel]][1], SD[[option$panel]][2], group_name, trajectories = 'prAD',
+                  labels = labels, description = glue::glue("{group_name} neuronal program dynamics along prAD ({option$xlab})"))
       withr::with_pdf(file.path(figures_dir, glue::glue("{option$panel}_{group_name}_dynamics.pdf")), {
         print(plot.dynamics.wrapper(option$dynamics,
                                     features = features,
@@ -1172,7 +1239,9 @@ AD.traits.colors <- c(sqrt.amyloid_mf="midnightblue", sqrt.tangles_mf="olivedrab
                             cell_fun = cell_fun,
                             show_heatmap_legend =FALSE) %>%
       draw(annotation_legend_list=list(legend, correlation.legend),
-           column_title=glue::glue("Branch probability correlation"))
+           column_title=glue::glue("Branch probability correlation")) %>%
+      sd_tee("ED5", "a", description = "Spearman correlation of trajectory probabilities, programs-based (rows) vs Green et al. (columns)")
+    sd_corr(c, "ED5", "a")
   })
 })()
 
@@ -1202,7 +1271,7 @@ AD.traits.colors <- c(sqrt.amyloid_mf="midnightblue", sqrt.tangles_mf="olivedrab
          scale_color_gradientn(colors=pallet(20)) +
          theme_minimal() +
          labs(x="Green et al pseudotime", y='Pseudotime', color='prAD branch prob.', title = "Pseudotime comparision")
-      )  %>% print
+      )  %>% sd_tee("ED5", "b", description = "Per individual: pseudotime and branch probabilities, Green et al. (x) vs programs-based (y); colour = our.prAD - our.ABA") %>% print
   })
 
 })()
@@ -1247,18 +1316,20 @@ AD.traits.colors <- c(sqrt.amyloid_mf="midnightblue", sqrt.tangles_mf="olivedrab
                            '7'='RNA splicing'))
 
   withr::with_pdf(file.path(figures_dir, "3b_inhibitory_k8_pathway_network_rast_edges_only.pdf"), {
-    print(plot_pathways_overview_graph(inhibitory_pts, k='k8', max_distance = 0.7,
+    print(sd_tee(plot_pathways_overview_graph(inhibitory_pts, k='k8', max_distance = 0.7,
                                        rasterise_edges = TRUE,
                                        group_names=group_names$k8,
-                                       seed=2, named_nodes=pathways_to_show[["k8"]]))
+                                       seed=2, named_nodes=pathways_to_show[["k8"]]),
+                 "Fig3", "b", "INH.p8", description = "INH.p8 (increasing-2) enriched pathway network: nodes (pathways, layout, cluster, p-values) and edges (pairwise distance)"))
   })
 
   withr::with_pdf(file.path(figures_dir, "3b_inhibitory_k10_pathway_network_rast_edges_only.pdf"), width = embed.width * 2,
                   height = embed.height * 2, {
-      print(plot_pathways_overview_graph(inhibitory_pts, k='k10', max_distance = 0.3,
+      print(sd_tee(plot_pathways_overview_graph(inhibitory_pts, k='k10', max_distance = 0.3,
                                          rasterise_edges = TRUE,
                                          group_names=group_names$k10,
-                                         seed=13, named_nodes=pathways_to_show[["k10"]]))
+                                         seed=13, named_nodes=pathways_to_show[["k10"]]),
+                   "Fig3", "b", "INH.p10", description = "INH.p10 (increasing-1) enriched pathway network: nodes (pathways, layout, cluster, p-values) and edges (pairwise distance)"))
   })
 
 })()
@@ -1288,6 +1359,7 @@ AD.traits.colors <- c(sqrt.amyloid_mf="midnightblue", sqrt.tangles_mf="olivedrab
       pivot_longer(cols=c(number_of_not_as, number_of_as_de), names_to = 'de_type', values_to = 'n') %>%
       mutate(topic=factor(str_replace(topic, "k", "p"), levels=paste0('p', 1:length(topic))))
 
+    sd_add(as_stats, "ED6", "c", ct, description = glue::glue("{ct}: number of DE genes and antisense DE genes per program, hypergeometric p and BH-adjusted p"))
     ct_name <- case_when(ct == 'inhibitory' ~ "Inhibitory",
                          ct == 'cux2p' ~ "Exc L2-3",
                          ct == 'cux2m' ~ "Exc L4-6")
@@ -1330,6 +1402,9 @@ AD.traits.colors <- c(sqrt.amyloid_mf="midnightblue", sqrt.tangles_mf="olivedrab
     "R-HSA-5205647" = c("Mitophagy", "decreasing_early")
   )
 
+  SD <- list("GO:0005761"=c("Fig2", "f"), "GO:0051028"=c("Fig2", "f"), "GO:0099572"=c("Fig2", "f"),
+             "GO:0051402"=c("Fig2", "f"), "R-HSA-68886"=c("Fig2", "f"),
+             "GO:0006979"=c("ED6", "g"), "hsa04721"=c("ED6", "i"))
   for (pathway_id in names(pathways_to_name_and_topic_group)) {
     group_name <- pathways_to_name_and_topic_group[[pathway_id]][[2]]
     pathway_name <- pathways_to_name_and_topic_group[[pathway_id]][[1]]
@@ -1357,6 +1432,9 @@ AD.traits.colors <- c(sqrt.amyloid_mf="midnightblue", sqrt.tangles_mf="olivedrab
     dynamics <- pathways.dynamics(data=data, genes=all_genes,
                                   pseudobulks=pseudobulks, scale=T, signature=T,
                                   cell.types=cell.types)
+    sd_dynamics(dynamics, cell.types, sd_lookup(SD, pathway_id)[1], sd_lookup(SD, pathway_id)[2], pathway_name,
+                trajectories = 'prAD', labels = cell.type.labels,
+                description = glue::glue("{pathway_id} {pathway_name}: mean scaled pathway-gene expression per individual along prAD pseudotime, per neuronal class; (*) = pathway enriched in the {group_name} program"))
 
     withr::with_pdf(file.path(figures_dir, glue::glue("2f_{group_name}_{pathway_name}.pdf")), width=embed.width, height=embed.height * 1.5, {
       print(plot.dynamics.wrapper(dynamics,
@@ -1578,12 +1656,12 @@ PROGRAM_GROUP_TO_PATHWAYS <- list(
     colors = colorRampPalette(c("#008585", "white", "#c7522a"))(100)
   )
   
-  # Create p-value annotation for legend
+  # Create FDR annotation for legend (stars come from the BH-adjusted p_adj)
   p_value_legend <- Legend(
-    title = "p-value",
+    title = "FDR",
     pch = c("*", "**"),
     type = "points",
-    labels = c("p < 0.05", "p < 0.01"),
+    labels = c("FDR < 0.05", "FDR < 0.01"),
     title_gp = gpar(fontface = "plain")
   )
   
@@ -1618,9 +1696,11 @@ PROGRAM_GROUP_TO_PATHWAYS <- list(
     )
     
     draw(ht, heatmap_legend_side = "bottom", annotation_legend_side = "right",
-         merge_legend = TRUE)
+         merge_legend = TRUE) %>%
+      sd_tee("Fig3", "c", "coherence", description = "Left: program coherence, sign-preserving log(Cohen's d + 1) per program x dataset (displayed order); stars from p_adj in the coherence_stats table")
+    sd_add(coherence_df %>% filter(program_celltype %in% program_celltypes), "Fig3", "c", "coherence_stats")
     
-    # Add p-value legend
+    # Add FDR legend
     draw(p_value_legend, x = unit(0.98, "npc"), y = unit(0.5, "npc"), just = c("right", "center"))
   })
   
@@ -1677,7 +1757,9 @@ PROGRAM_GROUP_TO_PATHWAYS <- list(
                 row_order = unlist(PROGRAM_GROUP_TO_PATHWAYS, use.names = FALSE),
                 column_order = unlist(PROGRAM_GROUP_TO_PATHWAYS, use.names = FALSE),
                 name='correlation',
-                left_annotation = pathway_group_anno) %>% draw
+                left_annotation = pathway_group_anno) %>% draw %>%
+          sd_tee(if (project == "mit") "ED7" else "ED7", if (project == "mit") "b" else "a", c(project, cell.type),
+                 description = glue::glue("{project} {cell.type}: Spearman correlation across cells of pathway signature scores, displayed order"))
       })
     }
   }
@@ -1719,14 +1801,15 @@ PROGRAM_GROUP_TO_PATHWAYS <- list(
     
     
     df <- df %>% mutate(covariate=glue::glue("{cell.type}_{covariate}") %>% gsub("SignatureUnique_", "", .))
+    df$covariate_raw <- as.character(df$covariate)   # source data: keep the program id behind each row label
     covariate_mapping <- c(
       "inhibitory_k1" = "Inhibitory decreasing early",
       "excitatory_decreasing_early" = "Excitatory decreasing early",
       "inhibitory_k7" = "Inhibitory decreasing late",
       "excitatory_decreasing_late" = "Excitatory decreasing late",
-      "inhibitory_k8" = "Inhibitory increasing-1",
+      "inhibitory_k10" = "Inhibitory increasing-1",   # INH.p10 = increasing-1 (labels were swapped, A2; typo fixed, A16)
       "excitatory_increasing_early" = "Excitatory increasing-1",
-      "inhibitory_k10" = "Inhibitory increasiing-2",
+      "inhibitory_k8" = "Inhibitory increasing-2",    # INH.p8 = increasing-2
       "excitatory_increasing_late" = "Excitatory increasing-2"
     )
 
@@ -1769,8 +1852,10 @@ PROGRAM_GROUP_TO_PATHWAYS <- list(
                     type = "points", labels = c("<0.001","<0.01", "<0.05"))
 
     withr::with_pdf(file.path(figures_dir, glue::glue("3c_validation_{project}_trait_association_{score_type}.pdf")), width=embed.width, height = embed.height * 2, {
-        draw(hm, annotation_legend_list = list(legend), merge_legend=T, column_title=glue::glue("{project} - Trait association - {score_type}"))
+        draw(hm, annotation_legend_list = list(legend), merge_legend=T, column_title=glue::glue("{project} - Trait association - {score_type}")) %>%
+          sd_tee("Fig3", "c", c("trait", project), description = glue::glue("Right, {project}: t statistic of program-signature association to AD traits (displayed order)"))
     })
+    sd_add(df, "Fig3", "c", c("trait", project, "stats"))
   }
 })()
 
@@ -1848,19 +1933,22 @@ PROGRAM_GROUP_TO_PATHWAYS <- list(
                   cell_fun = function(j, i, x, y, w, h, fill) grid.text(sig[i,j], x,y),
                   cluster_columns = FALSE,
                   cluster_rows = FALSE,
-                  row_order = covariate_levels,
+                  row_order = covariate_levels[covariate_levels %in% rownames(vals)],
                   clustering_distance_columns = "euclidean",
                   column_names_rot = 45,
                   show_column_dend = FALSE,
                   show_row_dend = FALSE,
-                  left_annotation = pathway_group_anno)
+                  left_annotation = pathway_group_anno[match(rownames(vals), unique(df$covariate))])
 
       legend <- Legend(title = "FDR", pch = c("***","**","*"),
                       type = "points", labels = c("<0.001","<0.01", "<0.05"))
 
       withr::with_pdf(file.path(figures_dir, glue::glue("7SuplC_validation_{project}_trait_association_{score_type}_{neuronal_class}.pdf")), width=embed.width, height = embed.height * 2, {
-          draw(hm, annotation_legend_list = list(legend), merge_legend=T, column_title=glue::glue("{project} - Trait association - {score_type} - {neuronal_class}"))
+          draw(hm, annotation_legend_list = list(legend), merge_legend=T, column_title=glue::glue("{project} - Trait association - {score_type} - {neuronal_class}")) %>%
+            sd_tee(if (project == "psychAD") "ED7" else NA, "c", neuronal_class,
+                   description = glue::glue("PsychAD {neuronal_class}: t statistic of pathway-score association to AD traits (displayed order)"))
       })
+      sd_add(df_neuronal_class, if (project == "psychAD") "ED7" else NA, "c", c(neuronal_class, "stats"))
     }
   }
 })()
@@ -1921,16 +2009,41 @@ plot_by_subtype <- function(
     p <- p + scale_fill_manual(values = subtype_colors)
   }
 
-  # Add t.test comparison if needed
+  # Two-sided Wilcoxon rank-sum test per panel, BH-adjusted across the panels of this plot.
+  # Drawn with the same geom_signif call (and defaults) that stat_compare_means uses,
+  # so only the P values behind the stars change.
   if (!is.null(comparisons)) {
-    p <- p + stat_compare_means(
-      method = "t.test",
-      comparisons = comparisons,
-      label = "p.signif",
-      hide.ns = FALSE
+    stats <- subtype_wilcox_bh(df_long_by_subtype, comparisons)
+    key <- function(x, y) paste(sort(signif(c(mean(x, na.rm = TRUE), mean(y, na.rm = TRUE)), 10)), collapse = "_")
+    p_adj_by_key <- setNames(stats$p.adj, stats$key)
+    wilcox_bh <- function(x, y, ...) list(p.value = unname(p_adj_by_key[key(x, y)]))
+    p <- p + ggsignif::geom_signif(
+      comparisons = comparisons, y_position = NULL, test = wilcox_bh,
+      step_increase = 0.12, size = 0.3, textsize = 3.88, color = "black",
+      map_signif_level = c(`****` = 1e-04, `***` = 0.001, `**` = 0.01, `*` = 0.05, ns = 1),
+      tip_length = 0.03, vjust = 0
     )
   }
   p
+}
+
+# Two-sided Wilcoxon rank-sum test per panel (Name) and comparison; BH over all rows.
+subtype_wilcox_bh <- function(df_long_by_subtype, comparisons) {
+  key <- function(x, y) paste(sort(signif(c(mean(x, na.rm = TRUE), mean(y, na.rm = TRUE)), 10)), collapse = "_")
+  purrr::map_dfr(comparisons, function(cmp) {
+    df_long_by_subtype %>%
+      filter(subtype %in% cmp) %>%
+      group_by(Name) %>%
+      summarise(
+        group1 = cmp[1], group2 = cmp[2],
+        n1 = sum(!is.na(Score[subtype == cmp[1]])), n2 = sum(!is.na(Score[subtype == cmp[2]])),
+        p = suppressWarnings(wilcox.test(Score[subtype == cmp[1]], Score[subtype == cmp[2]])$p.value),
+        key = key(Score[subtype == cmp[1]], Score[subtype == cmp[2]]),
+        .groups = "drop"
+      )
+  }) %>%
+    mutate(p.adj = p.adjust(p, method = "BH"), method = "Wilcoxon rank-sum test, BH",
+           p.signif = as.character(cut(p.adj, c(-Inf, 1e-4, 1e-3, 1e-2, 0.05, Inf), c("****", "***", "**", "*", "ns"))))
 }
 
 
@@ -1995,8 +2108,12 @@ plot_by_subtype <- function(
     subtype_colors <- c("SST" = "#ef6c00", "PVALB" = "#4db6ac")
 
     withr::with_pdf(file.path(figures_dir, glue::glue("5d_validation_{project}_vulnerability_by_subtype_AD.pdf")), height = 12 + 2*length(cols_to_plot), {
-        print(plot_by_subtype(df_long_by_subtype, cols_to_plot=cols_to_plot, comparisons=comparisons, sample_id_column=sample_id_column, subtype_colors=subtype_colors))
+        print(sd_tee(plot_by_subtype(df_long_by_subtype, cols_to_plot=cols_to_plot, comparisons=comparisons, sample_id_column=sample_id_column, subtype_colors=subtype_colors),
+                     if (project == "psychAD") "Fig5" else "ED9", if (project == "psychAD") "d" else "b", project,
+                     description = glue::glue("{project}: per-donor mean signature score per inhibitory subtype (AD donors), SST vs PVALB")))
     })
+    sd_add(subtype_wilcox_bh(df_long_by_subtype %>% filter(Name %in% cols_to_plot), comparisons) %>% select(-key),
+           if (project == "psychAD") "Fig5" else "ED9", if (project == "psychAD") "d" else "b", c(project, "stats"))
   }
 })()
 
@@ -2076,8 +2193,11 @@ plot_by_subtype <- function(
                                                 )
     print(panel)
     withr::with_pdf(file.path(figures_dir, glue::glue("{panel}_proteomics_all.pdf")), height = unit(18, 'mm'), width = unit(4, "mm"), {
-      draw(hm$hm, annotation_legend_list=hm$legend, merge_legend=T)
+      draw(hm$hm, annotation_legend_list=hm$legend, merge_legend=T) %>%
+        sd_tee(if (panel == "3e") "Fig3" else "ED7", if (panel == "3e") "e" else "d", "proteins",
+               description = "t statistic of protein-abundance association to AD traits, grouped by pathway (displayed order)")
     })
+    sd_add(all_prot_traits, if (panel == "3e") "Fig3" else "ED7", if (panel == "3e") "e" else "d", c("proteins", "stats"))
   }
 })()
 
@@ -2104,7 +2224,8 @@ plot_by_subtype <- function(
   topics_names <- unlist(lapply(neuronal_topics_to_annotation, names), use.names = FALSE)
   
   
-  withr::with_pdf(file.path(figures_dir, "3d.pdf"), heidht = embed.height * 1.2, width = embed.width *1.2, {
+  withr::with_pdf(file.path(figures_dir, "3d.pdf"), height = embed.height * 1.2,
+                   width = embed.width *1.2, {
     plot.trait.associations.heatmap(data$uns$syn.trait.analysis %>%
                                       py_to_r %>%
                                       filter(grepl("Inh|Exc", covariate)) %>% 
@@ -2123,7 +2244,8 @@ plot_by_subtype <- function(
                                     column_names_gp=grid::gpar(fontsize = 8),
                                     row_names_gp=grid::gpar(fontsize = 8),
                                     # row_gap=unit(7, "mm"),
-                                    cols=cyan2orange)
+                                    cols=cyan2orange) %>%
+      sd_tee("Fig3", "d", description = "t statistic of ELISA synaptic protein levels / interactions association to neuronal programs (displayed order)")
   })
 })()
 
@@ -2151,6 +2273,8 @@ plot_by_subtype <- function(
     dynamics <- pathways.dynamics(data=data, genes=c(gene),
                                   pseudobulks=pseudobulks, scale=T, signature=T,
                                   cell.types=cell.types)
+    sd_dynamics(dynamics, cell.types, if (gene %in% c("BRCA1", "ATR")) "Fig4" else NA, "a", gene, trajectories = 'prAD',
+                labels = cell.type.labels, description = glue::glue("{gene}: scaled expression per individual along prAD pseudotime per neuronal class"))
 
 
     withr::with_pdf(file.path(figures_dir, glue::glue("4a_{gene}.pdf")), width=embed.width, height=embed.height, {
@@ -2209,7 +2333,10 @@ plot_by_subtype <- function(
   )
 
   cell.types <- c("inhibitory", 'cux2m', 'cux2p')
-
+  SD <- list("mitochondrial ribosome"="a", "mitophagy"="b", "postsynaptic specialization"="d", "mRNA transport"="e",
+             "neuron apoptotic process"="f", "response to oxidative stress"="h", "vesicle release cycle"="j",
+             "Metallothioneins bind metals"="k", "M phase"="l", "chromatin remodelling"="m", "heat shock response"="n",
+             "DNA damage repair"="o")
 
   for (group_name in names(gene_groups)) {
     print(group_name)
@@ -2266,7 +2393,11 @@ plot_by_subtype <- function(
                                   row_labels=labels,
                                   cluster_rows = FALSE,
                                   row_order = order(labels),
-                                  title=glue::glue("{group_name} dynamics")) %>% draw
+                                  title=glue::glue("{group_name} dynamics")) %>% draw %>%
+        sd_tee(if (is.null(SD[[group_name]])) NA else "ED6", SD[[group_name]], group_name,
+               description = glue::glue("{group_name}: per gene x neuronal class, LFC along pseudotime (left) and fitted expression along prAD pseudotime (right), displayed order"))
+      sd_add(data.frame(feature = names(labels), label = unname(labels)), if (is.null(SD[[group_name]])) NA else "ED6",
+             SD[[group_name]], c(group_name, "row_labels"))
 
     })
   }
@@ -2291,6 +2422,9 @@ plot_by_subtype <- function(
     
     labels <- c("cell-cycle reentry program", "stress/apoptosis program")
     names(labels) <- c(cell_cycle_topic, apoptosis_topic)
+    sd_add(embedding %>% dplyr::select(x, y, all_of(c(cell_cycle_topic, apoptosis_topic))),
+           if (ct == "inhibitory") "Fig4" else NA, "b", ct,
+           description = glue::glue("{ct}: per-cell UMAP coordinates and locally smoothed density of the cell-cycle reentry ({cell_cycle_topic}) and stress/apoptosis ({apoptosis_topic}) programs"))
     
     withr::with_pdf(file.path(figures_dir, glue::glue("4b_{ct}_umap_cell_cycle_vs_apoptosis.pdf")), height = embed.height.small*1.2, width = embed.width, {
       print(plot_umap_density2(embedding, columns = c(cell_cycle_topic, apoptosis_topic), ncol=2, labels = labels, title=ct))
@@ -2353,7 +2487,10 @@ plot_by_subtype <- function(
                               show_column_names = TRUE,
                               cell_fun = cell_fun
       ) %>% draw(annotation_legend_list=list(legend, correlation.legend),
-                 column_title=glue::glue("{cell.types.names[[ct_index]]} - programs correlation across cells"))
+                 column_title=glue::glue("{cell.types.names[[ct_index]]} - programs correlation across cells")) %>%
+        sd_tee(if (ct == "inhibitory") "Fig4" else "ED8", if (ct == "inhibitory") "c" else "a", ct,
+               description = glue::glue("{ct}: Spearman correlation across cells of the four AD-associated programs"))
+      sd_corr(c, if (ct == "inhibitory") "Fig4" else "ED8", if (ct == "inhibitory") "c" else "a", ct)
     })
   }
 
@@ -2440,6 +2577,13 @@ plot_by_subtype <- function(
     quantiles_apoptosis <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/apoptosis_quantiles"))
     quantiles_cell_cycle <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/cell_cycle_quantiles"))
     df <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/cell_cycle_apoptosis"))
+    SDp <- c(inhibitory="b", cux2m="c", cux2p="d")[[ct]]
+    sd_add(df %>% filter(group %in% c("start", "prAD")) %>% dplyr::select(cell, projid, group, apoptosis_topic_score, cell_cycle_topic_score),
+           "ED8", SDp, c(ct, "cells"), description = glue::glue("{ct}: per-cell stress/apoptosis and cell-cycle program scores in healthy (start) and prAD individuals (density plots)"))
+    sd_add(quantiles_apoptosis, "ED8", SDp, c(ct, "apoptosis_quantiles"),
+           description = glue::glue("{ct}: stress/apoptosis score thresholds (dashed lines): threshold = score at the start_quantile of the healthy (start) cells; prAD_quantile = percentile (0-100) of that threshold among prAD cells (plotted for 80%, 90%, 95%)"))
+    sd_add(quantiles_cell_cycle, "ED8", SDp, c(ct, "cell_cycle_quantiles"),
+           description = glue::glue("{ct}: cell-cycle reentry score thresholds (dashed lines): threshold = score at the start_quantile of the healthy (start) cells; prAD_quantile = percentile (0-100) of that threshold among prAD cells (plotted for 80%, 90%, 95%)"))
 
     withr::with_pdf(file.path(figures_dir, glue::glue("8SuplD_{ct}_program_density.pdf")), height = embed.height*0.75, width = embed.width*1.25, {
       print(plot_topic_quantiles(df, "apoptosis_topic_score", quantiles_apoptosis, title = glue::glue('{ct}\napoptosis program histogram')))
@@ -2522,7 +2666,7 @@ plot_by_subtype <- function(
       ) +
       theme_classic(base_size = 11) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
-    print(p)
+    print(sd_tee(p, "ED8", "g", description = "Spearman correlation across cells of increasing-1 vs increasing-2 signature scores per neuronal class, with adjusted p"))
   })
 
   message(glue::glue("Increasing signature score correlation barplot saved to {plot_file_path}"))
@@ -2607,7 +2751,7 @@ plot_by_subtype <- function(
         strip.text = element_text(face = "bold"),
         axis.text.x = element_text(angle = 45, hjust = 1)
       )
-    print(p)
+    print(sd_tee(p, "Fig4", "g", description = "Spearman correlation across cells of increasing-1 vs increasing-2 programs per validation dataset and neuronal class, with adjusted p"))
   })
 
   message(glue::glue("Increasing program correlation barplot saved to {plot_file_path}"))
@@ -2674,7 +2818,9 @@ plot_by_subtype <- function(
                             show_column_names = TRUE,
                             cell_fun = cell_fun
     ) %>% draw(annotation_legend_list=correlation.legend,
-                column_title=glue::glue("Spatial increasing pathways correlation"))
+                column_title=glue::glue("Spatial increasing pathways correlation")) %>%
+      sd_tee("Fig4", "f", description = "Spearman correlation across spatial excitatory cells of pathway scores (displayed, clustered order)")
+    sd_corr(c, "Fig4", "f")
   })
 
   breaks <- seq(-1, 1, length.out = 101)
@@ -2691,6 +2837,13 @@ plot_by_subtype <- function(
 
 (function () {
   cts <- c("inhibitory", "cux2p", "cux2m")
+  quantile_threshold <- 95
+  for (ct in cts) {
+    df <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/cell_cycle_apoptosis"))
+    sd_add(df %>% dplyr::count(apoptosis_cell = apoptosis_95 == 1, cell_cycle_cell = cell_cycle_95 == 1) %>% mutate(percent = 100 * n / sum(n)),
+           if (ct == "inhibitory") "Fig4" else "ED8", c(inhibitory="d", cux2m="e", cux2p="f")[[ct]], ct,
+           description = glue::glue("{ct}: number of cells above the 95% threshold of the stress/apoptosis and/or cell-cycle program (Venn counts)"))
+  }
   for (ct in cts) {
     df <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[[ct]], "/cell_cycle_apoptosis"))
 
@@ -2716,9 +2869,11 @@ plot_by_subtype <- function(
     prop_cells_df <- prop_cells_df %>% filter(!is.na(group) & group != 'NA')
     quantiles <- c("95", "90", "80")
 
+    SD <- list(inhibitory_95=c("Fig4", "h"), cux2m_95=c("Fig4", "h"), cux2p_95=c("ED8", "k"),
+               inhibitory_90=c("ED8", "l"), cux2m_90=c("ED8", "l"))
     withr::with_pdf(file.path(figures_dir, glue::glue("4h_number_of_cell_start_vs_prAD_{ct}_boxplot.pdf")), width = embed.width, height = embed.height, {
       for (q in quantiles) {
-        print(ggboxplot(prop_cells_df, x="group",
+        print(sd_tee(ggboxplot(prop_cells_df, x="group",
                     y=glue::glue("prop_cell_cycle_{q}"), fill="group",
                     outlier.shape = NA) +
                 stat_compare_means(comparisons=list(c('prAD', 'start')), label = "p.signif") +
@@ -2727,7 +2882,9 @@ plot_by_subtype <- function(
                       panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) +
                 labs(title=glue::glue("cell cycle cells propotion - {q}%"), x='group', y='% of neurons') +
                 scale_fill_manual(values=c("start"="#74a892",
-                                           "prAD"="#c7522a")))
+                                           "prAD"="#c7522a")),
+              sd_lookup(SD, glue::glue("{ct}_{q}"))[1], sd_lookup(SD, glue::glue("{ct}_{q}"))[2], c(ct, q),
+              description = glue::glue("{ct}: per-individual proportion of cell-cycle reentry neurons ({q}% threshold), healthy (start) vs prAD")))
       }
     })
   }
@@ -2756,8 +2913,10 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
 
   data_df <- data_df %>% mutate(Group=factor(Group, levels=c("Control I", "Control II", "AD Early", "AD Advanced")))
 
+  sd_add(data_df %>% group_by(Group) %>% mutate(prop = Mean / sum(Mean)) %>% ungroup, "Fig4", "i",
+         description = "Hyperploid neuron counts (mean, SEM) from Mosch et al. 2007 (J Neurosci, doi:10.1523/JNEUROSCI.0379-07.2007); prop = fraction within group")
   withr::with_pdf(file.path(figures_dir, "4i_hyperploidity.pdf"), width = embed.width.small * 1.5, height = embed.height.small, {
- `   print(data_df %>% group_by(Group) %>% mutate(prop = Mean /sum(Mean)) %>%
+    print(data_df %>% group_by(Group) %>% mutate(prop = Mean /sum(Mean)) %>%
       ungroup %>%
       ggplot(aes(x=n, y=prop, fill=Group)) + geom_bar(stat = 'identity', position = 'dodge') +
       theme_minimal() +
@@ -2767,7 +2926,7 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
       scale_fill_manual(values=c("Control I"="#74a892",
                                  "Control II"="#008585",
                                  "AD Early"="#c7522a",
-                                 "AD Advanced"="#f0daa5")))`
+                                 "AD Advanced"="#f0daa5")))
   })
 
 })
@@ -2855,11 +3014,13 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
                    cluster_rows = FALSE, name="Cells propotion",
                    cluster_columns = FALSE,
                    width=4*unit(7, "mm"), column_title='Cells propotion',
-                   height = length(subtype_order)*unit(7, "mm"),
+                   height = nrow(vuln_mat)*unit(7, "mm"),
                    col = circlize::colorRamp2(c(0, max_percent_cells), c("white", "red")),
                    bottom_annotation = annotation) +tratit_hm_and_legend$hm
-      )
+      ) %>% sd_tee("Fig5", "a", neuronal_class,
+                   description = glue::glue("{neuronal_class}: fraction of neurons per subtype above the 95% threshold of each program in prAD individuals (left) and t statistic of subtype proportion association to AD traits (right), displayed order"))
     }) 
+    sd_add(traits, "Fig5", "a", c(neuronal_class, "trait_stats"))
   }
 })()
 
@@ -2900,6 +3061,10 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
                                evaluate.fit = T,
                                bootstrap = F)
       
+      SDb <- list(cell_cycle_topic_score=c("Fig5", "b"), apoptosis_topic_score=c("Fig5", "b"),
+                  decreasing_early_topic_score=c("ED9", "a"), decreasing_late_topic_score=c("ED9", "a"))
+      sd_dynamics(dynamics, c("SST", "PVALB"), sd_lookup(SDb, c)[1], sd_lookup(SDb, c)[2], c, trajectories = 'prAD',
+                  description = glue::glue("{c}: sqrt mean program score per individual in SST and PVALB neurons along prAD pseudotime"))
       print(plot.dynamics.wrapper(dynamics,
                                   features =  c("SST", "PVALB"),
                                   overlap.pseudotime=TOPIC_OVERLLAPING_PSEUDOTIME,
@@ -2949,7 +3114,8 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
       file.path(figures_dir, glue::glue("5c_{ct}_{prog$score_col}_SST_vs_PVALB.pdf")),
       width = embed.width, height = embed.height * 1.1,
     {
-      print(make_sst_vs_pvalb_plot(dynamics_features, prog$score_col, prog$label, ct))
+      print(sd_tee(make_sst_vs_pvalb_plot(dynamics_features, prog$score_col, prog$label, ct), "Fig5", "c", prog$score_col,
+                   description = glue::glue("{prog$label}: per-donor mean program score in SST and PVALB neurons, healthy (start) vs prAD; layer with BH-adjusted Wilcoxon p")))
     })
   }
 })()
@@ -2990,9 +3156,10 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
     senescence_like_genes <- unlist(senescence_like_signatures, use.names = FALSE)
     withr::with_pdf(file.path(figures_dir, glue::glue("4j_SenescenceCellCycleDotplot_by_group_{ct}.pdf")), width = embed.width*1.5, height = embed.height, {
       df <- df %>% filter(cell_group != 'prAD neither')
-      print(dot_plot(df , senescence_like_genes, group.vector = df[["cell_group"]], alpha.threshold = 0, scale = TRUE, mean_threshold = -0.1, 
+      print(sd_tee(dot_plot(df , senescence_like_genes, group.vector = df[["cell_group"]], alpha.threshold = 0, scale = TRUE, mean_threshold = -0.1, 
         column.group=column_group, order=FALSE) +
-        theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + labs(title=glue::glue("Senescence related genes in {ct}"), x="", y=""))
+        theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + labs(title=glue::glue("Senescence related genes in {ct}"), x="", y=""),
+        "Fig4", "j", ct, description = "Per gene x cell group: scaled mean expression and percent of expressing cells (dot plot)"))
     })
   }
 })()
@@ -3051,6 +3218,10 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
         label = signif_labels
       )
       
+      SDe <- if (ct == "cux2m" && feature %in% c("presynaptic_genes", "postsynaptic_genes")) "Fig5" else NA
+      sd_add(df %>% dplyr::select(any_of(c("cell", "projid", "group")), cell_group, all_of(feature)), SDe, "e", c(ct, feature),
+             description = glue::glue("{ct}: per-cell {feature_name} by cell group (violin data)"))
+      sd_add(annotation_df, SDe, "e", c(ct, feature, "stats"))
       withr::with_pdf(file.path(figures_dir, glue::glue("5e_siganture_{ct}_{feature}.pdf")), width = embed.width, height = embed.height, {
         print(ggviolin(df, x="cell_group", fill="cell_group", y=feature, legend.title='cell group') + 
                 stat_summary(fun = mean, geom = "crossbar", width = 0.3, color = "black") + 
@@ -3139,6 +3310,9 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
 
     withr::with_pdf(file.path(figures_dir, glue::glue("9SupC_neurotransmitters_levels_in_group_{nt}.pdf")), {
       filtered_subtype_df <- subtype_df %>% filter(.data[[nt]] < MAX_EXPRESSION)
+      sd_add(filtered_subtype_df %>% dplyr::select(any_of(c("cell", "projid", "group")), cell_group, all_of(nt)), "ED9", "c", nt,
+             description = glue::glue("{nt} expression per {nt} neuron by cell group (cells with expression < {MAX_EXPRESSION}, as plotted)"))
+      sd_add(annotation_df, "ED9", "c", c(nt, "stats"))
       print(ggviolin(filtered_subtype_df, x="cell_group", fill="cell_group", y=nt, legend.title='cell group') +
         stat_summary(fun = mean, geom = "crossbar", width = 0.3, color = "black") +
         geom_signif(
@@ -3207,7 +3381,9 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
                                           cluster_row_slices=FALSE,
                                           column_labels=AD_TRAITS_NAMES,
                                           row_labels=prot_traits$gene,
-                                          column_title="presynaptic proteins")
+                                          column_title="presynaptic proteins") %>%
+      sd_tee("ED7", "d", "presynaptic_proteins", description = "Synaptic vesicle cycle proteins: t statistic of association to AD traits (displayed order)")
+    sd_add(prot_traits, "ED7", "d", c("presynaptic_proteins", "stats"))
 
   })
 })()
@@ -3299,14 +3475,17 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
 
   )
 
+  sd_add(program.order, "ED9", "d", "program_order", description = "Programs in plotted order with their (sub-)community")
+  sd_add(dyn.adjacency, "ED9", "d", "dynamics_similarity", description = "Dynamics similarity between programs (lower triangle of the plot), plotted order")
+  sd_add(corr, "ED9", "d", "correlation", description = "Spearman correlation of program abundance across individuals (upper triangle of the plot), plotted order")
   withr::with_pdf(file.path(figures_dir, "9SupD.pdf"), width=embed.width*2, height=embed.height*2, {
     Heatmap(
-      matrices[[i]],
+      matrices[[1]],
       row_split = program.order$comm,
       column_split = program.order$comm,
       cluster_rows = F,
       cluster_columns = F,
-      col = colors[[i]],
+      col = colors[[1]],
       rect_gp = gpar(type = "none"),
       cell_fun = function(j, i, x, y, w, h, col) {
         if(i==j) grid.rect(x,y,w,h, gp = gpar(fill="black", col=NA))
@@ -3409,8 +3588,14 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
         cell_fun = NULL,
         show_column_names = FALSE,
         show_row_names = FALSE,
-      ) %>% draw(column_title=glue::glue("{project} - Community correlation across individuals"))
+      ) %>% draw(column_title=glue::glue("{project} - Community correlation across individuals")) %>%
+        sd_tee(if (project == "seaad") "ED9" else "ED10", if (project == "seaad") "e" else "a", project,
+               description = glue::glue("{project}: correlation across individuals of program signature scores, ordered by community (displayed order)"))
     })
+    sd_add(data.frame(program = c_subset$names[[1]],
+                      community = programs_community$community[match(c_subset$names[[1]], programs_community$short_program_name)],
+                      sub_community = programs_community$sub.community[match(c_subset$names[[1]], programs_community$short_program_name)]),
+           if (project == "seaad") "ED9" else "ED10", if (project == "seaad") "e" else "a", c(project, "communities"))
   }
 })()
 
@@ -3439,7 +3624,8 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
                                 ) %>% draw(column_title='Pseudotime',
                                            column_title_side='bottom',
                                            row_title='Sub-communities',
-                                           row_title_side='left')
+                                           row_title_side='left') %>%
+      sd_tee("Fig6", "a", description = "Fitted program abundance along prAD (left) and ABA (right) pseudotime, scaled per program; rows split by sub-community (displayed order)")
   })
 })()
 
@@ -3454,8 +3640,10 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
                                     height=10*unit(8, "mm"),
                                     width=unit(30, "mm"),
                                     column_labels=AD_TRAITS_NAMES,
-                                    show.only.significant = F)
+                                    show.only.significant = F) %>%
+      sd_tee("Fig6", "b", description = "t statistic of sub-community proportion association to AD traits (displayed order)")
   })
+  sd_trait(data$uns$communities$trait.association, c("sqrt.amyloid_mf","sqrt.tangles_mf","cogng_demog_slope"), "Fig6", "b")
 })()
 
 
@@ -3570,6 +3758,12 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
                              bootstrap = F)
 
 
+    SDg <- list("Cellular response to heat stress"=c("Fig6", "c", "prAD"), "Metallothioneins bind metals"=c("Fig6", "c", "prAD"),
+                "Increasing"=c("Fig6", "d", "prAD"), "Synaptic pathways"=c("Fig7", "b", NA), "OligoMylin"=c("Fig7", "c", NA))
+    sd_dynamics(dynamics, colnames(pathways_scores), sd_lookup(SDg, group)[1], sd_lookup(SDg, group)[2], group,
+                trajectories = if (is.null(SDg[[group]]) || is.na(SDg[[group]][3])) NULL else SDg[[group]][3],
+                description = glue::glue("{group}: mean scaled pathway-gene expression per individual along pseudotime, per pathway x cell type"))
+
     withr::with_pdf(file.path(figures_dir, glue::glue("6c_{group}.pdf")), width=embed.width, height=embed.height, {
       print(plot.dynamics.wrapper(dynamics,
                                   features = pathways_scores %>% colnames(),
@@ -3638,7 +3832,8 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
                                   clustering_distance_rows='spearman',
                                   use_slanter_ordering=TRUE
       ) %>% draw(column_title='pseudotime',
-                 column_title_side='bottom')
+                 column_title_side='bottom') %>%
+        sd_tee("Fig7", "a", group_name, description = glue::glue("{group_name}: fitted program abundance along prAD (left) and ABA (right) pseudotime, scaled (displayed order)"))
     }
   })
 })()
@@ -3684,7 +3879,8 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
                                   clustering_distance_rows='spearman',
                                   use_slanter_ordering=TRUE
       ) %>% draw(column_title='Green et al pseudotime',
-                 column_title_side='bottom')
+                 column_title_side='bottom') %>%
+        sd_tee("ED10", "f", group_name, description = glue::glue("{group_name}: fitted program abundance along Green et al. prAD and ABA pseudotime, scaled (displayed order)"))
     }
   })
 })()
@@ -3715,6 +3911,8 @@ AD Advanced,123.1,12.2,51.0,14.1,2.1,1.2,7"
                                         "synap_3cort_stagmin"),
                           "Complexin"=c("synap_3cort_complex2", "synap_3cort_complex1"))
   trajectories_list <- list(c('prAD'), c('prAD', 'ABA'))
+  sd_dynamics(data$uns$trajectories$palantir$syn_dynamics, features_groups[["Complexin"]], "Fig7", "d", "complexin",
+              labels = unlist(synapse_trait_col_to_name), description = "COMPLEXIN I and II ELISA levels (scaled) per individual along prAD and ABA pseudotime")
   withr::with_pdf(file.path(figures_dir, "6d_elisa_dynamics.pdf"), height = embed.height, width = embed.width * 1.6, {
     for (group in names(features_groups)) {
       for (trajectories in trajectories_list) {

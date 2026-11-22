@@ -28,6 +28,7 @@ library(ggrastr)
 
 # Load project utilities
 source("R/utils.R")  # Load get_result_dir() and get_shared_dir()
+source("R/source_data.R")  # Source Data helpers (sd_add, sd_tee); writes to {SD_DIR}/staging only
 
 # Detect environment and set base directories
 PLOTS_DIR <- get_result_dir()           # Auto-detects cluster vs local
@@ -44,7 +45,8 @@ ENRICHMENT_PROGRAMS__HEALTHY_PATH <- file.path(ENRICHMENT_BASE_DIR, "programs/al
 ENRICHMENT_PATHWAYS_PATH <- file.path(ENRICHMENT_BASE_DIR, "pathways/all_pvals_pathways.csv")
 
 # Output directory for spatial plots
-SPATIAL_PLOTS_DIR <- file.path(PLOTS_DIR, "spatial")
+# SPATIAL_PLOTS_DIR env var lets a re-run write elsewhere (Source Data run: source_data/figures_rerun/spatial)
+SPATIAL_PLOTS_DIR <- Sys.getenv("SPATIAL_PLOTS_DIR", file.path(PLOTS_DIR, "spatial"))
 dir.create(SPATIAL_PLOTS_DIR, recursive = TRUE, showWarnings = FALSE)
 
 # Verify required files exist
@@ -282,6 +284,16 @@ plot_pairs_boxplot_healthy <- function(
     )
 }
 
+# Source Data for the co-localization boxplots: per-sample ratios and the stats behind the stars
+sd_pairs <- function(data, pairs_df, sample_cols, fig, panel, what) {
+  df <- data %>% semi_join(pairs_df, by = c("ref_topic", "neighbor_topic"))
+  sd_add(df %>% dplyr::select(ref_topic, neighbor_topic, bin, all_of(sample_cols)), fig, panel, "per_sample",
+         description = glue::glue("{what}: co-localization enrichment of the neighbour program around the reference program, one column per sample (1 = no enrichment; boxplot points)"))
+  sd_add(df %>% dplyr::select(ref_topic, neighbor_topic, bin, mean_enrichment, p_raw, shapiro_W, shapiro_p, p_bh), fig, panel, "stats",
+         description = glue::glue("{what}: one-sample t-test of the per-sample values against 1 (p_raw) and BH-adjusted p (p_bh, gives the stars; BH within each reference program and neighbour cell type, 2-7 tests, as in spatial_analysis.ipynb), from the stored enrichment CSV"))
+}
+AD_SAMPLE_COLS <- c("A02092E1", "B01809C2", "B02008C6", "B02008D2", "B02009F6", "C02248B5")
+
 programs_data <- read.csv(ENRICHMENT_PROGRAMS_PATH)
 programs_data_healthy <- read.csv(ENRICHMENT_PROGRAMS__HEALTHY_PATH)
 
@@ -310,6 +322,7 @@ withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "pairs_boxplot_80.pdf"), width=6, h
     pairs_df = pairs_df_80
   ) %>% print
 })
+sd_pairs(programs_data, pairs_df_80, AD_SAMPLE_COLS, "Fig6", "f", "AD samples, 80% quantile programs")
 
 withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "pairs_boxplot_80_healthy.pdf"), width=6, height=6, { 
   plot_pairs_boxplot_healthy(
@@ -318,6 +331,7 @@ withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "pairs_boxplot_80_healthy.pdf"), wi
     healthy_sample_cols = non_AD_sample_id
   ) %>% print
 })  
+sd_pairs(programs_data_healthy, pairs_df_80, non_AD_sample_id, "ED10", "e", "Control samples, 80% quantile programs")
 
 pairs_df_85 <- tibble(
   ref_topic = c(
@@ -344,6 +358,7 @@ withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "pairs_boxplot_85.pdf"), width=6, h
     pairs_df = pairs_df_85
   ) %>% print
 })
+sd_pairs(programs_data, pairs_df_85, AD_SAMPLE_COLS, "ED10", "b", "AD samples, 85% quantile programs")
 
 
 #pathways: 
@@ -374,6 +389,7 @@ withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "pairs_boxplot_pathways.pdf"), widt
       pairs_df = pairs_df_pathways
     ) %>% print
 })
+sd_pairs(pathways_data, pairs_df_pathways, AD_SAMPLE_COLS, "ED10", "c", "AD samples, pathways (bimodal threshold) and programs (80% quantile)")
 
 
 
@@ -450,6 +466,9 @@ ggsave(
   width = 6,
   height = 6
 )
+sd_add(obs_df %>% filter(sample_id == "B02009F6") %>% tibble::rownames_to_column("cell") %>%
+         dplyr::select(cell, sample_id, annotation, x, y, Ex_k3_score_bin80, Ex_k9_score_bin80),
+       "Fig4", "e", description = "Sample B02009F6, all cells. Ex_k3_score_bin80 = stress/apoptosis (left), Ex_k9_score_bin80 = cell-cycle reentry (right): 1 = coloured, 0 = excitatory cell not drawn, NA = non-excitatory cell drawn in grey")
 
 
 
@@ -538,6 +557,7 @@ plot_cell_neighborhood <- function(
 
 p=plot_cell_neighborhood(obs_df%>%filter(sample_id=="B01809C2"), cell_index = "65575560697256",col1='Ex_k3_score_bin80', col2 = "AST_k6_score_bin80",
                          col3='Microglia_k8_score_bin80',col4 = 'Ex_k9_score_bin80',sample_id='B01809C2',square_size=250)
+ggsave(file.path(SPATIAL_PLOTS_DIR, "zoom_colocalization_B01809C2.pdf"), p, width = 6, height = 6)
 
 
 
@@ -621,6 +641,15 @@ p=plot_full_slice(
   col4="Ex_k9_score_bin80",
   sample_id = specific_sample
 )
+ggsave(file.path(SPATIAL_PLOTS_DIR, "full_slice_colocalization_B01809C2.pdf"), p, width = 8, height = 6)
+local({
+  d <- obs_df %>% filter(sample_id == specific_sample)
+  c0 <- d["65575560697256", c("x", "y")]
+  sd_add(d %>% tibble::rownames_to_column("cell") %>%
+           mutate(in_zoom = abs(x - c0$x) <= 250 & abs(y - c0$y) <= 250, zoom_centre = cell == "65575560697256") %>%
+           dplyr::select(cell, sample_id, annotation, x, y, Ex_k3_score_bin80, AST_k6_score_bin80, Microglia_k8_score_bin80, Ex_k9_score_bin80, in_zoom, zoom_centre),
+         "Fig6", "e", description = "Sample B01809C2, all cells (left). 1 = cell in program: Ex_k3 = EXC.p3 stress/apoptosis, AST_k6 = AST.p6, Microglia_k8 = MIC.p8, Ex_k9 = EXC.p9 cell-cycle reentry. Right (zoom): in_zoom cells, a square of +-250 units around zoom_centre (arrow); dashed circles of radius 200 around Microglia_k8 cells")
+})
 
 
 
@@ -681,6 +710,8 @@ withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "cell_type_distribution_per_sample.
     
   )
 })
+sd_add(df_plot %>% dplyr::select(sample_id, levels, annotation, n), "ED8", "h",
+       description = "Number of cells per sample and cell type (levels = diagnosis group)")
 
 ##########################################
 #### Supp Fig 8- scores distributions ####
@@ -724,6 +755,8 @@ withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "Ex_k3_score_density_with_quantiles
           ))
   
 })
+sd_add(data.frame(Ex_k3_score = x), "ED8", "i", "scores", description = "Stress/apoptosis program (Ex_k3) signature score of every cell with a score (density)")
+sd_add(q_df, "ED8", "i", "quantiles", description = "Dashed lines: 75/80/85% quantiles of the score")
 
 
 
@@ -751,6 +784,8 @@ withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "Ex_oxidative_stress_density_with_q
     
   )
 })
+sd_add(data.frame(Ex_response_to_oxidative_stress_score = pt[!is.na(pt)]), "ED8", "j",
+       description = "Response to oxidative stress pathway signature score of every excitatory cell (density; NaN rows, which ggplot drops, removed); dashed line at 0.29")
 
 # TODO: add correlation heatmap
 
@@ -940,7 +975,10 @@ plot_bin_proportion_boxplots <- function(
     )
 }
 withr::with_pdf(file.path(SPATIAL_PLOTS_DIR, "bin_proportion_boxplots_80.pdf"), width=6, height=12, { 
-  plot_bin_proportion_boxplots(obs_df, programs = c("Ex_k3_score_bin80", "AST_k6_score_bin80", "Microglia_k8_score_bin80", "Ex_k9_score_bin80"), bin_num = "80") %>% print
+  g <- plot_bin_proportion_boxplots(obs_df, programs = c("Ex_k3_score_bin80", "AST_k6_score_bin80", "Microglia_k8_score_bin80", "Ex_k9_score_bin80"), bin_num = "80")
+  print(g)
+  sd_add(g$data %>% dplyr::select(program, sample_id, diagnosis, bin_cell_count, total_annotation_cells, proportion, adj_p, sig), "ED10", "d",
+         description = "Per sample: cells in the program (bin_cell_count) / cells of that cell type (total_annotation_cells) = proportion; Wilcoxon test control vs case, BH across the 4 programs (adj_p)")
 })
 
 message("Spatial analysis complete. Plots saved to: ", SPATIAL_PLOTS_DIR)

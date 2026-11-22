@@ -31,7 +31,7 @@ data.da <- data.da[intersect(rownames(data.da), rownames(topic_space)),]
 topic_space <- topic_space[rownames(data.da),]
 
 
-data <- AnnData(X=data$X,
+data <- AnnData(X=topic_space,
                 obsm=list(meta.data=data.da$obsm$meta.data, QCs=data.da$obsm$QCs),
                 obs=list(batches=data.da$obs$batches, main.batch=data.da$obs$main.batch))
 
@@ -160,7 +160,7 @@ df <-annotations %>% filter(projid != "NA" & !grouping.by %in% c("Immune", "Vasc
    .groups = "drop")
 
 # convert to wide format
-df <- df %>% pivot_wider(names_from = grouping.by, values_from = c("umi")) %>% 
+df <- df %>% pivot_wider(id_cols = projid, names_from = grouping.by, values_from = c("umi")) %>%
   column_to_rownames("projid")
 df <- df[rownames(data),]
 

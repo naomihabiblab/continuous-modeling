@@ -141,7 +141,7 @@ project_dir <- file.path(get_result_dir(), project)
 donor.meta.data <- read.csv(file.path(get_shared_dir(), "500_topics", "donor_meta_data.csv")) %>% column_to_rownames("projid")
 traits_columns <- c("sqrt.amyloid", "sqrt.amyloid_mf", "sqrt.tangles", "sqrt.tangles_mf", "cogng_demog_slope")
 
-for (neuronal_class in c("inhibitory", "excitatory")[2]) {
+for (neuronal_class in c("inhibitory", "excitatory")) {
   df <- h5read(TOPICS_DATA_H5_PATH, paste0(CELL_TYPE_TO_GROUP[neuronal_class], "/", project, "/mean_scores")) %>% column_to_rownames("projid")
 
     if (neuronal_class == "inhibitory") {

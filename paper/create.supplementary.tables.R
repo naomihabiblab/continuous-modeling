@@ -3,6 +3,7 @@ library(openxlsx)
 source("R/proteomics.R")
 source("R/data_500_utils.R")
 source("R/topic_space_functions.R")
+source("paper/supplementary_tables_neuronal.R")
 
 creator <- "Roi Meir, Habib Lab, HUJI"
 
@@ -160,23 +161,11 @@ format.sheet <- function(wb, sheet, df, sets, horizontal.border.after=NULL) {
   # Create a sheet for program signature (unique genes per topic) #
   # From validation/compute_excitatory_unique_signatures.R    #
   # -------------------------------------------------------- #
-  program_signature_cells <- c("inhibitory", "excitatory")
-  df_sig <- lapply(program_signature_cells, function(ct) {
-    path <- paste0(CELL_TYPE_TO_GROUP[[ct]], "/program_signature")
-    out <- tryCatch(
-      h5read(TOPICS_DATA_H5_PATH, path) %>% mutate(cell.type = ct),
-      error = function(e) NULL
-    )
-    out$cell.type <- ct
-    out
-  })
-  df_sig <- df_sig[!sapply(df_sig, is.null)]
-  if (length(df_sig) > 0L) {
-    df_sig <- do.call(rbind, df_sig)
-    df_sig <- df_sig %>% dplyr::select(cell.type, topic, gene)
+  df_sig <- program_signature_sheet()
+  if (nrow(df_sig) > 0L) {
     addWorksheet(wb, "program unique signature", gridLines = TRUE)
     writeData(wb, sheet = "program unique signature", df_sig, rowNames = FALSE)
-    wb <- format.sheet(wb, "program unique signature", df_sig, df_sig %>% mutate(v = topic != lag(topic)) %>% pull(v))
+    wb <- format.sheet(wb, "program unique signature", df_sig, df_sig %>% mutate(v = program != lag(program)) %>% pull(v))
   }
 
   # -------------------------------------------------------- #
@@ -224,7 +213,7 @@ format.sheet <- function(wb, sheet, df, sets, horizontal.border.after=NULL) {
     mutate(program=topic_names_mapping(covariate, use_static_mapping=FALSE)) %>% 
     dplyr::select(trait, program, beta, se, tstat, pval, r.sq, n, formula, adj.pval, sig)
 
-  addWorksheet(wb, (sheet <- "Endophenoptye associations"), gridLines = TRUE)
+  addWorksheet(wb, (sheet <- "Endophenotype associations"), gridLines = TRUE)
   writeData(wb, sheet, df, rowNames = FALSE)
   addStyle(wb, sheet = sheet, header.style(), rows = 1, cols = 0:ncol(df)+1, gridExpand = TRUE)
   
@@ -243,44 +232,12 @@ format.sheet <- function(wb, sheet, df, sets, horizontal.border.after=NULL) {
   # -------------------------------------------------------- #
   # Validation trait associations (one worksheet per dataset) #
   # -------------------------------------------------------- #
-  validation_projects <- list(
-    seaad = "SeaAD",
-    psychAD = "PsychAD",
-    cuimc2 = "CUIMC2",
-    mit = "MIT"
-  )
-  neuronal_classes <- c("inhibitory", "excitatory")
-
-  for (proj in names(validation_projects)) {
-    display_name <- validation_projects[[proj]]
-    sheets_data <- list()
-
-    for (neuronal_class in neuronal_classes) {
-      group_path <- paste0(CELL_TYPE_TO_GROUP[[neuronal_class]], "/", proj, "/")
-      for (assoc_type in c("trait_association_signature", "trait_association_pathway")) {
-        path <- paste0(group_path, assoc_type)
-        df_val <- tryCatch(
-          h5read(TOPICS_DATA_H5_PATH, path),
-          error = function(e) NULL
-        )
-        if (!is.null(df_val) && nrow(df_val) > 0) {
-          df_val <- as.data.frame(df_val)
-          type_label <- if (assoc_type == "trait_association_signature") "signature" else "pathway"
-          df_val$validation_dataset <- display_name
-          df_val$neuronal_class <- neuronal_class
-          df_val$type <- type_label
-          sheets_data[[paste(neuronal_class, type_label, sep = "_")]] <- df_val
-        }
-      }
-    }
-
-    if (length(sheets_data) > 0) {
-      df_validation <- dplyr::bind_rows(sheets_data)
-      sheet_name <- paste0("Validation ", display_name)
-      addWorksheet(wb, sheet_name, gridLines = TRUE)
-      writeData(wb, sheet = sheet_name, df_validation, rowNames = FALSE)
-      addStyle(wb, sheet = sheet_name, header.style(), rows = 1, cols = 1:ncol(df_validation), gridExpand = TRUE)
-    }
+  validation_sheets <- validation_association_sheets()
+  for (sheet_name in names(validation_sheets)) {
+    df_validation <- validation_sheets[[sheet_name]]
+    addWorksheet(wb, sheet_name, gridLines = TRUE)
+    writeData(wb, sheet = sheet_name, df_validation, rowNames = FALSE)
+    addStyle(wb, sheet = sheet_name, header.style(), rows = 1, cols = 1:ncol(df_validation), gridExpand = TRUE)
   }
 
   saveWorkbook(wb, file.path(SUPPLEMENTARY_DATA_DIR, "Supplementary Table 3 - Abundance and association.xlsx"),

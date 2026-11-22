@@ -273,6 +273,8 @@ correlate_dataframes <- function (X, Y=NA, use="pairwise.complete.obs", method =
       cor.test(X[,i], Y[,j], use=use, method = method)[["p.value"]]))
   )
 
+  # number of observations (pairwise complete) behind each correlation
+  cor$n <- crossprod(!is.na(as.matrix(X)), !is.na(as.matrix(Y)))
   cor$adj.pval <- matrix(p.adjust(cor$pval, method = p.adjust.method), nrow=nrow(cor$pval))
   cor$sig <- matrix(cut(cor$adj.pval, c(-.1, 0.001, 0.01, 0.05, Inf), c("***", "**", "*", "")), nrow=nrow(cor$pval))
 
